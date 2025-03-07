@@ -9,6 +9,7 @@ The script uses a topic exchange to filter messages based on routing keys provid
 import json
 import re
 import sys
+import requests
 
 import pika
 from phpserialize import *
@@ -118,6 +119,19 @@ def callback(ch, method, properties, body):
     # Extract structured command data from the serialized message
     command_data = extract_command_data(decoded_body)
     print(f" [x] Received command: {command_data}")
+
+    # Send the command result to the specified URL
+    url = "http://localhost:8000/api/agent/command_result"
+    headers = {"Content-Type": "application/json"}
+    command_result = {
+        "command_id": command_data["id"],
+        "status": "done",
+    }
+    print(f" [x] Sending command result: {command_result}")
+    # Send a POST request with the command result as JSON
+    response = requests.post(url, json=command_result, headers=headers)
+    # Print the response status code for debugging
+    print(f" [x] Response status code: {response.status_code}")
 
 
 # Configure the consumer to use our callback function when messages arrive
