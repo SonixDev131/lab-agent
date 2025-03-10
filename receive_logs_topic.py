@@ -7,12 +7,10 @@ It extracts command data from PHP serialized messages and processes them accordi
 The script uses a topic exchange to filter messages based on routing keys provided as command line arguments.
 """
 import json
-import re
 import sys
 import requests
 
 import pika
-from phpserialize import *
 
 # Establish connection to RabbitMQ server using CloudAMQP hosting
 connection = pika.BlockingConnection(
@@ -52,53 +50,29 @@ print(" [*] Waiting for commands. To exit press CTRL+C")
 
 def extract_command_data(serialized_data):
     """
-    Extract command data from Laravel's serialized job format
-
-    The data comes in a nested format:
-    1. Outer JSON wrapper
-    2. Inside that, a PHP-serialized string containing command details
-    3. Within the PHP data, we extract specific command properties
+    Extract command data from JSON message
 
     Args:
-        serialized_data (str): The JSON+PHP serialized data from Laravel
+        serialized_data (str): The JSON data from the message
 
     Returns:
         dict: Extracted command data or error information
     """
     try:
-        # Parse the JSON outer wrapper first
+        # Parse the JSON data
         data = json.loads(serialized_data)
 
-        # Look for the serialized PHP command data in the expected location
-        if "data" in data and "command" in data["data"]:
-            php_data = data["data"]["command"]
+        # Check if all required fields are present
+        if "data" in data and all(
+            key in data["data"] for key in ["id", "machine_id", "command_type"]
+        ):
+            return {
+                "id": data["data"]["id"],
+                "machine_id": data["data"]["machine_id"],
+                "command_type": data["data"]["command_type"],
+            }
 
-            # Use regex to extract specific fields from PHP serialized format
-            # This approach is used because the standard phpserialize library
-            # may not fully handle Laravel's specific serialization format
-            command_match = re.search(r'commandData";a:\d+:{(.*?)}', php_data)
-            if command_match:
-                command_part = command_match.group(1)
-
-                # Extract individual command properties with regex
-                # Format follows PHP serialization: s:keyLength:"keyName";s:valueLength:"value"
-                id_match = re.search(r's:2:"id";s:\d+:"(.*?)"', command_part)
-                machine_id_match = re.search(
-                    r's:10:"machine_id";s:\d+:"(.*?)"', command_part
-                )
-                command_type_match = re.search(
-                    r's:12:"command_type";s:\d+:"(.*?)"', command_part
-                )
-
-                # Construct and return the extracted data if all fields were found
-                if id_match and machine_id_match and command_type_match:
-                    return {
-                        "id": id_match.group(1),
-                        "machine_id": machine_id_match.group(1),
-                        "command_type": command_type_match.group(1),
-                    }
-
-        return {"error": "Could not parse command data"}
+        return {"error": "Missing required command data fields"}
     except Exception as e:
         # Return error information if any exception occurs during parsing
         return {"error": str(e)}
@@ -114,9 +88,10 @@ def callback(ch, method, properties, body):
         properties: Message properties
         body: Message content (bytes)
     """
+    print(" [x] Received message body: ", body)
     # Convert binary message body to UTF-8 string
     decoded_body = body.decode("utf-8")
-    # Extract structured command data from the serialized message
+    # Extract structured command data from the JSON message
     command_data = extract_command_data(decoded_body)
     print(f" [x] Received command: {command_data}")
 
