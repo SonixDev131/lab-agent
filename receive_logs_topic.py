@@ -1,117 +1,100 @@
 #!/usr/bin/env python
 """
-RabbitMQ Command Receiver
-
-This script connects to a RabbitMQ server and listens for command messages from a Laravel application.
-It extracts command data from PHP serialized messages and processes them accordingly.
-The script uses a topic exchange to filter messages based on routing keys provided as command line arguments.
+UniLab Agent - Phiên bản cơ bản nhất
+Kết nối đến RabbitMQ và in ra message nhận được
 """
 import json
-import sys
-import requests
-
 import pika
+import sys
 
-# Establish connection to RabbitMQ server using CloudAMQP hosting
-connection = pika.BlockingConnection(
-    pika.URLParameters(
-        "amqps://aizfhyyx:LZhALcBsyDLc1pqBJNowAzFWJ_GsaSBw@armadillo.rmq.cloudamqp.com/aizfhyyx"
-    )
+# Cấu hình kết nối RabbitMQ
+rabbitmq_url = "amqps://aizfhyyx:LZhALcBsyDLc1pqBJNowAzFWJ_GsaSBw@armadillo.rmq.cloudamqp.com/aizfhyyx"
+computer_id = (
+    "9e6af32e-5342-446f-9414-4c2d86406d4e"  # Thay thế với ID thực tế của máy tính
 )
-channel = connection.channel()
-
-# Declare the exchange that matches the one used by the Laravel application
-# Topic exchange type allows filtering messages based on routing patterns
-channel.exchange_declare(
-    exchange="agent_command_exchange", exchange_type="topic", durable=True
-)
-
-# Create a temporary queue that will be deleted when the connection closes
-# exclusive=True ensures this queue is used only by this connection
-result = channel.queue_declare("", exclusive=True)
-queue_name = result.method.queue
-
-# Process command line arguments as routing keys for message filtering
-# Example: python receive_logs_topic.py "agent.command.#" "machine.123"
-binding_keys = sys.argv[1:]
-if not binding_keys:
-    sys.stderr.write("Usage: %s [binding_key]...\n" % sys.argv[0])
-    sys.exit(1)
-
-# Bind the temporary queue to the exchange for each routing key specified
-# This determines which messages this consumer will receive
-for binding_key in binding_keys:
-    channel.queue_bind(
-        exchange="agent_command_exchange", queue=queue_name, routing_key=binding_key
-    )
-
-print(" [*] Waiting for commands. To exit press CTRL+C")
+room_id = "9e6a2b9a-24f1-4b97-a038-362d9ffcf1d5"  # Thay thế với ID thực tế của phòng
 
 
-def extract_command_data(serialized_data):
-    """
-    Extract command data from JSON message
-
-    Args:
-        serialized_data (str): The JSON data from the message
-
-    Returns:
-        dict: Extracted command data or error information
-    """
-    try:
-        # Parse the JSON data
-        data = json.loads(serialized_data)
-
-        # Check if all required fields are present
-        if "data" in data and all(
-            key in data["data"] for key in ["id", "machine_id", "command_type"]
-        ):
-            return {
-                "id": data["data"]["id"],
-                "machine_id": data["data"]["machine_id"],
-                "command_type": data["data"]["command_type"],
-            }
-
-        return {"error": "Missing required command data fields"}
-    except Exception as e:
-        # Return error information if any exception occurs during parsing
-        return {"error": str(e)}
-
-
+# Hàm callback để xử lý message nhận được
 def callback(ch, method, properties, body):
-    """
-    Process each message received from RabbitMQ
+    print(f"[x] Nhận được message - Routing key: {method.routing_key}")
+    try:
+        # Giải mã JSON
+        message = json.loads(body.decode("utf-8"))
+        print(f"[x] Nội dung: {json.dumps(message, indent=2)}")
+    except json.JSONDecodeError:
+        print(f"[!] Không thể giải mã JSON: {body.decode('utf-8')}")
 
-    Args:
-        ch: Channel object
-        method: Contains delivery information like routing key
-        properties: Message properties
-        body: Message content (bytes)
-    """
-    print(" [x] Received message body: ", body)
-    # Convert binary message body to UTF-8 string
-    decoded_body = body.decode("utf-8")
-    # Extract structured command data from the JSON message
-    command_data = extract_command_data(decoded_body)
-    print(f" [x] Received command: {command_data}")
-
-    # Send the command result to the specified URL
-    url = "http://localhost:8000/api/agent/command_result"
-    headers = {"Content-Type": "application/json"}
-    command_result = {
-        "command_id": command_data["id"],
-        "status": "done",
-    }
-    print(f" [x] Sending command result: {command_result}")
-    # Send a POST request with the command result as JSON
-    response = requests.post(url, json=command_result, headers=headers)
-    # Print the response status code for debugging
-    print(f" [x] Response status code: {response.status_code}")
+    # Xác nhận đã nhận message
+    ch.basic_ack(delivery_tag=method.delivery_tag)
+    print("-" * 50)
 
 
-# Configure the consumer to use our callback function when messages arrive
-# auto_ack=True means messages are acknowledged automatically when processed
-channel.basic_consume(queue=queue_name, on_message_callback=callback, auto_ack=True)
+def main():
+    try:
+        # Thiết lập kết nối
+        print("[*] Đang kết nối đến RabbitMQ...")
+        connection = pika.BlockingConnection(pika.URLParameters(rabbitmq_url))
+        channel = connection.channel()
 
-# Start consuming messages - this blocks until CTRL+C or the channel is closed
-channel.start_consuming()
+        # Khai báo exchange
+        print("[*] Khai báo exchange 'unilab.commands'...")
+        channel.exchange_declare(
+            exchange="unilab.commands", exchange_type="topic", durable=True
+        )
+
+        # Tạo queue tạm thời
+        print("[*] Tạo queue cho máy tính này...")
+        queue_name = f"command.computer.{computer_id}"
+        channel.queue_declare(queue=queue_name, durable=True)
+
+        # Binding queue với routing key
+        # 1. Lệnh cho máy tính cụ thể
+        print(f"[*] Binding queue với routing key cho máy tính {computer_id}")
+        channel.queue_bind(
+            exchange="unilab.commands",
+            queue=queue_name,
+            routing_key=f"command.room_{room_id}.computer_{computer_id}",
+        )
+
+        # 2. Lệnh cho toàn bộ phòng
+        print(f"[*] Binding queue với routing key cho phòng {room_id}")
+        channel.queue_bind(
+            exchange="unilab.commands",
+            queue=queue_name,
+            routing_key=f"command.room_{room_id}.*",
+        )
+
+        # Thiết lập consumer
+        print("[*] Bắt đầu lắng nghe các message...")
+        channel.basic_consume(
+            queue=queue_name,
+            on_message_callback=callback,
+            auto_ack=False,  # Tự quản lý acknowledgment
+        )
+
+        print(f"[*] Agent đang chạy. Ấn CTRL+C để thoát.")
+        print(
+            f"[*] Đang lắng nghe lệnh cho máy tính {computer_id} trong phòng {room_id}"
+        )
+
+        # Bắt đầu lắng nghe message
+        channel.start_consuming()
+
+    except pika.exceptions.AMQPConnectionError as error:
+        print(f"[!] Lỗi kết nối: {error}")
+        return 1
+    except KeyboardInterrupt:
+        print("[*] Đã ngắt bởi người dùng")
+        return 0
+    except Exception as error:
+        print(f"[!] Lỗi không xác định: {error}")
+        return 1
+    finally:
+        if "connection" in locals() and connection.is_open:
+            connection.close()
+            print("[*] Đã đóng kết nối")
+
+
+if __name__ == "__main__":
+    sys.exit(main())
