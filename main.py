@@ -1,9 +1,7 @@
-import sys
 import threading
 import time
 from metrics_collector import MetricsCollector
 from command_listener import CommandListener
-from auto_updater import check_and_update
 
 
 def main():
@@ -11,12 +9,6 @@ def main():
     # ...
     computer_id = "866d0dd4-719d-4a75-8e99-bfba11f3bd2e"
     room_id = "019619ce-04a4-717a-b349-726e8dd5e66b"
-
-    # Kiểm tra cập nhật
-    if check_and_update():
-        print("[*] Đã cập nhật, khởi động lại agent...")
-        # NSSM sẽ tự khởi động lại dịch vụ nếu được cấu hình
-        sys.exit(0)
 
     # Khởi tạo các module
     metrics = MetricsCollector(computer_id, room_id)
