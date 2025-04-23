@@ -2,22 +2,24 @@ import threading
 import time
 from metrics_collector import MetricsCollector
 from command_listener import CommandListener
+from registration import register_computer
 
 
 def main():
     # Kiểm tra và đăng ký máy tính
-    # ...
-    computer_id = "866d0dd4-719d-4a75-8e99-bfba11f3bd2e"
-    room_id = "019619ce-04a4-717a-b349-726e8dd5e66b"
+    computer_id, room_id = register_computer()
+    if not computer_id or not room_id:
+        print("[!] Không thể đăng ký máy tính. Đang thoát...")
+        exit(1)
 
     # Khởi tạo các module
-    metrics = MetricsCollector(computer_id, room_id)
+    # metrics = MetricsCollector(computer_id, room_id)
     listener = CommandListener(computer_id, room_id)
 
     # Chạy các luồng
-    metrics_thread = threading.Thread(target=metrics.start)
+    # metrics_thread = threading.Thread(target=metrics.start)
     listener_thread = threading.Thread(target=listener.start)
-    metrics_thread.start()
+    # metrics_thread.start()
     listener_thread.start()
 
     # Vòng lặp chính, giữ chương trình chạy
@@ -26,9 +28,9 @@ def main():
             time.sleep(1)
     except KeyboardInterrupt:
         print("[*] Đang dừng agent...")
-        metrics.stop()
+        # metrics.stop()
         listener.stop()
-        metrics_thread.join()
+        # metrics_thread.join()
         listener_thread.join()
         print("[*] Agent đã dừng.")
 

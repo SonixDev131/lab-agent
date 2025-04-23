@@ -135,7 +135,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-pygent_env/
+agent_venv/
 
 # Spyder project settings
 .spyderproject

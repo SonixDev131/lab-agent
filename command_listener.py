@@ -23,34 +23,34 @@ class CommandListener:
             command_type = command_data.get("command", "")
             print(f"[*] Thực hiện lệnh: {command_type}")
 
-            if command_type == "shutdown":
-                self.metrics_collector.send_status_update("shutting_down")
-                if platform.system() == "Windows":
-                    os.system('shutdown /s /t 5 /c "Tắt máy theo yêu cầu"')
-                else:
-                    os.system('sudo shutdown -h +1 "Tắt máy theo yêu cầu"')
-                return True
-
-            elif command_type == "restart":
-                self.metrics_collector.send_status_update("restarting")
-                if platform.system() == "Windows":
-                    os.system('shutdown /r /t 5 /c "Khởi động lại theo yêu cầu"')
-                else:
-                    os.system('sudo shutdown -r +1 "Khởi động lại theo yêu cầu"')
-                return True
-
-            elif command_type == "status_request":
-                self.metrics_collector.send_status_update("online")
-                return True
-
-            elif command_type == "execute":
-                command = command_data.get("data", {}).get("command", "")
-                print(f"[*] Thực hiện lệnh hệ thống: {command}")
-                return True
-
-            else:
-                print(f"[!] Lệnh không được hỗ trợ: {command_type}")
-                return False
+            # if command_type == "shutdown":
+            #     self.metrics_collector.send_status_update("shutting_down")
+            #     if platform.system() == "Windows":
+            #         os.system('shutdown /s /t 5 /c "Tắt máy theo yêu cầu"')
+            #     else:
+            #         os.system('sudo shutdown -h +1 "Tắt máy theo yêu cầu"')
+            #     return True
+            #
+            # elif command_type == "restart":
+            #     self.metrics_collector.send_status_update("restarting")
+            #     if platform.system() == "Windows":
+            #         os.system('shutdown /r /t 5 /c "Khởi động lại theo yêu cầu"')
+            #     else:
+            #         os.system('sudo shutdown -r +1 "Khởi động lại theo yêu cầu"')
+            #     return True
+            #
+            # elif command_type == "status_request":
+            #     self.metrics_collector.send_status_update("online")
+            #     return True
+            #
+            # elif command_type == "execute":
+            #     command = command_data.get("data", {}).get("command", "")
+            #     print(f"[*] Thực hiện lệnh hệ thống: {command}")
+            #     return True
+            #
+            # else:
+            #     print(f"[!] Lệnh không được hỗ trợ: {command_type}")
+            #     return False
 
         except Exception as e:
             print(f"[!] Lỗi khi xử lý lệnh: {e}")
@@ -78,22 +78,28 @@ class CommandListener:
                 pika.URLParameters(self.rabbitmq_url)
             )
             self.channel = self.connection.channel()
-            self.channel.exchange_declare(
-                exchange="unilab.commands", exchange_type="topic", durable=True
-            )
 
-            queue_name = f"computer.{self.computer_id}"
+            # Open and read the JSON file
+            with open("agent_config.json", "r") as f:
+                data = json.load(f)
+                mac_address = data["mac_address"]
+
+            # self.channel.exchange_declare(
+            #     exchange="unilab.commands", exchange_type="topic", durable=True
+            # )
+
+            queue_name = mac_address
             self.channel.queue_declare(queue=queue_name, durable=True)
-            self.channel.queue_bind(
-                exchange="unilab.commands",
-                queue=queue_name,
-                routing_key=f"room.{self.room_id}.computer.{self.computer_id}",
-            )
-            self.channel.queue_bind(
-                exchange="unilab.commands",
-                queue=queue_name,
-                routing_key=f"room.{self.room_id}.*",
-            )
+            # self.channel.queue_bind(
+            #     exchange="unilab.commands",
+            #     queue=queue_name,
+            #     routing_key=f"room.{self.room_id}.computer.{self.computer_id}",
+            # )
+            # self.channel.queue_bind(
+            #     exchange="unilab.commands",
+            #     queue=queue_name,
+            #     routing_key=f"room.{self.room_id}.*",
+            # )
 
             self.channel.basic_consume(
                 queue=queue_name, on_message_callback=self.callback, auto_ack=False
