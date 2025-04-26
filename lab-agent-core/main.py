@@ -1,10 +1,19 @@
 import threading
 import time
+import sys
+import os
+import logging
+
+# Add parent directory to path so we can import from other modules
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Import from lab-agent-core
 from metrics_collector import MetricsCollector
 from command_listener import CommandListener
 from registration import register_computer
-from auto_updater import check_and_update
-import logging
+
+# Import from update-system
+from update_system.auto_updater import check_and_update
 
 # Configure logging
 logging.basicConfig(

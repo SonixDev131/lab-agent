@@ -61,7 +61,19 @@ class CommandListener:
         print(f"[x] Nhận được message - Routing key: {method.routing_key}")
         try:
             message = json.loads(body.decode("utf-8"))
+            source = "default"
+
+            # Xác định nguồn của message
+            if method.exchange == "cmd.direct":
+                source = f"CMD (room.{self.room_id})"
+            elif method.exchange == "broadcast.fanout":
+                source = "BROADCAST"
+            elif method.exchange == "":
+                source = "DIRECT (MAC)"
+
+            print(f"[x] Nguồn: {source}")
             print(f"[x] Nội dung: {json.dumps(message, indent=2)}")
+
             if "command" in message:
                 self.process_command(message)
         except json.JSONDecodeError:
@@ -74,38 +86,48 @@ class CommandListener:
         """Bắt đầu lắng nghe lệnh."""
         self.running = True
         try:
+            # Kết nối đến RabbitMQ server
             self.connection = pika.BlockingConnection(
                 pika.URLParameters(self.rabbitmq_url)
             )
             self.channel = self.connection.channel()
 
-            # Open and read the JSON file
+            # Đọc file config để lấy MAC address
             with open("agent_config.json", "r") as f:
                 data = json.load(f)
                 mac_address = data["mac_address"]
 
-            # self.channel.exchange_declare(
-            #     exchange="unilab.commands", exchange_type="topic", durable=True
-            # )
-
+            # 1. Tạo queue với tên là MAC address
             queue_name = mac_address
             self.channel.queue_declare(queue=queue_name, durable=True)
-            # self.channel.queue_bind(
-            #     exchange="unilab.commands",
-            #     queue=queue_name,
-            #     routing_key=f"room.{self.room_id}.computer.{self.computer_id}",
-            # )
-            # self.channel.queue_bind(
-            #     exchange="unilab.commands",
-            #     queue=queue_name,
-            #     routing_key=f"room.{self.room_id}.*",
-            # )
 
+            # 2. Khai báo và binding với exchange cmd.direct (theo phòng)
+            self.channel.exchange_declare(
+                exchange="cmd.direct", exchange_type="direct", durable=True
+            )
+            self.channel.queue_bind(
+                exchange="cmd.direct",
+                queue=queue_name,
+                routing_key=f"room.{self.room_id}",
+            )
+
+            # 3. Khai báo và binding với exchange broadcast.fanout
+            self.channel.exchange_declare(
+                exchange="broadcast.fanout", exchange_type="fanout", durable=True
+            )
+            self.channel.queue_bind(exchange="broadcast.fanout", queue=queue_name)
+
+            # 4. Default exchange (sử dụng MAC address làm routing key)
+            # Đây là thiết lập mặc định, không cần phải bind
+
+            # Thiết lập consumer
             self.channel.basic_consume(
                 queue=queue_name, on_message_callback=self.callback, auto_ack=False
             )
-            print(f"[*] Đang lắng nghe lệnh cho computer_id={self.computer_id}")
+            print(f"[*] Đang lắng nghe lệnh cho máy tính với MAC = {mac_address}")
+            print(f"[*] Phòng: {self.room_id}, ID máy: {self.computer_id}")
 
+            # Xử lý message đến
             while self.running:
                 self.connection.process_data_events(time_limit=1.0)
 

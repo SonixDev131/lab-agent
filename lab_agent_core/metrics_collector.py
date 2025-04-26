@@ -25,8 +25,10 @@ class MetricsCollector:
         try:
             return {
                 "cpu_usage": psutil.cpu_percent(interval=1),
-                "memory_usage": psutil.virtual_memory().percent,
-                "disk_usage": psutil.disk_usage("/").percent,
+                "memory_total": psutil.virtual_memory().total,
+                "memory_used": psutil.virtual_memory().used,
+                "disk_total": psutil.disk_usage("/").total,
+                "disk_used": psutil.disk_usage("/").used,
                 "uptime": int(time.time() - psutil.boot_time()),
                 "platform": platform.system(),
                 "platform_version": platform.version(),
@@ -40,9 +42,9 @@ class MetricsCollector:
         try:
             connection = pika.BlockingConnection(pika.URLParameters(self.rabbitmq_url))
             channel = connection.channel()
-            channel.exchange_declare(
-                exchange="unilab.status", exchange_type="topic", durable=True
-            )
+            channel.queue_declare(queue="metrics", durable=True)
+
+            print(f"[*] Sending status update: {status}")
 
             status_data = {
                 "computer_id": self.computer_id,
@@ -53,11 +55,12 @@ class MetricsCollector:
             }
 
             channel.basic_publish(
-                exchange="unilab.status",
-                routing_key="computer.status",
+                exchange="",
+                routing_key="metrics",
                 body=json.dumps(status_data),
                 properties=pika.BasicProperties(
-                    delivery_mode=2, content_type="application/json"
+                    delivery_mode=pika.DeliveryMode.Persistent,
+                    content_type="application/json",
                 ),
             )
 
