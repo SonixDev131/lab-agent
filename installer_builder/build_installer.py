@@ -28,11 +28,12 @@ def build_installer():
     print("Packaging updater for embedding...")
     updater_files = ["updater.py", "update_server.py", "extractor.py"]
     for file in updater_files:
-        src = os.path.join("..", file)
+        src = os.path.join("..", "update_system", file)
         dst = os.path.join("temp", file)
         if os.path.exists(src):
             shutil.copy2(src, dst)
-
+        else:
+            print(f"Warning: Could not find updater file: {src}")
     # Create the spec file for PyInstaller
     spec_content = """
 # -*- mode: python ; coding: utf-8 -*-
@@ -50,11 +51,19 @@ a = Analysis(['installer.py'],
              pathex=[],
              binaries=[],
              datas=added_files,
-             hiddenimports=[],
+             hiddenimports=['certifi', 'charset_normalizer', 'idna', 'requests', 
+                           'urllib3', 'psutil', 'pika', 'phpserialize'],
              hookspath=[],
              runtime_hooks=[],
              excludes=[],
              win_no_prefer_redirects=False,
+             win_private_assemblies=False,
+             cipher=block_cipher,
+             noarchive=False)
+             cipher=block_cipher,
+             noarchive=False)
+             cipher=block_cipher,
+             noarchive=False)
              win_private_assemblies=False,
              cipher=block_cipher,
              noarchive=False)

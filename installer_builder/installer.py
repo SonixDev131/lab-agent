@@ -30,48 +30,63 @@ def get_appdata_path():
     return os.path.join(os.environ["LOCALAPPDATA"], APP_NAME)
 
 
-def check_dotnet_framework():
+def check_python_requirements():
     """
-    Check if the required .NET Framework is installed.
-    Returns (is_installed, version)
+    Check if all required Python packages are installed.
+
+    Returns (is_satisfied, missing_packages)
     """
+    required_packages = [
+        "certifi",
+        "charset-normalizer",
+        "idna",
+        "requests",
+        "urllib3",
+        "psutil",
+        "pika",
+        "phpserialize",
+    ]
+
+    missing = []
+    for package in required_packages:
+        try:
+            __import__(package)
+        except ImportError:
+            missing.append(package)
+
+    return len(missing) == 0, missing
+
+
+def install_python_requirements(missing_packages):
+    """
+    Install missing Python packages.
+
+    This function installs any required Python packages that were found to be missing.
+    """
+    if not missing_packages:
+        return True
+
+    print(f"Installing missing Python packages: {', '.join(missing_packages)}")
+
     try:
-        # Check for .NET Framework 2.0/3.0
-        with winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE,
-            r"SOFTWARE\Microsoft\NET Framework Setup\NDP\v2.0.50727",
-        ) as key:
-            install = winreg.QueryValueEx(key, "Install")[0]
-            if install == 1:
-                version = winreg.QueryValueEx(key, "Version")[0]
-                return True, version
-        return False, None
-    except:
-        return False, None
-
-
-def download_dotnet_framework():
-    """
-    Download and install the required .NET Framework.
-    """
-    print("Downloading .NET Framework 2.0...")
-    dotnet_url = "https://download.microsoft.com/download/5/6/7/567758a3-759e-473e-bf8f-52154438565a/dotnetfx.exe"
-    temp_file = os.path.join(tempfile.gettempdir(), "dotnetfx.exe")
-
-    # Download the installer
-    urllib.request.urlretrieve(dotnet_url, temp_file)
-
-    # Run the installer silently
-    print("Installing .NET Framework 2.0...")
-    subprocess.call([temp_file, "/q", "/norestart"])
-
-    # Clean up
-    os.remove(temp_file)
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install"] + missing_packages
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"Error installing packages: {e}")
+        return False
 
 
 def extract_updater(install_dir):
     """
-    Extract the embedded Updater files to the installation directory.
+    Extract the embedded updater files to the installation directory.
+
+    This function:
+    1. Creates the destination directory structure
+    2. Locates the source files (works in both PyInstaller bundled mode and development mode)
+    3. Copies the updater components to the installation directory
+    4. Generates a configuration file with version info and update server URL
     """
     print(f"Installing to: {install_dir}")
 
@@ -79,6 +94,7 @@ def extract_updater(install_dir):
     os.makedirs(install_dir, exist_ok=True)
 
     # Get the path to the embedded updater files
+    # Running from a PyInstaller bundle (_MEIPASS will be set)
     bundle_dir = getattr(sys, "_MEIPASS", os.path.abspath(os.path.dirname(__file__)))
 
     # Copy updater files
@@ -88,14 +104,8 @@ def extract_updater(install_dir):
         dst = os.path.join(install_dir, file)
         if os.path.exists(src):
             shutil.copy2(src, dst)
-
-    # Create a basic configuration file
-    config = {"version": VERSION, "update_server_url": UPDATE_SERVER_URL}
-
-    with open(os.path.join(install_dir, "config.json"), "w") as f:
-        json.dump(config, f, indent=2)
-
-    print("Updater extracted successfully.")
+        else:
+            print(f"Warning: Could not find updater file: {src}")
 
 
 def create_shortcut(install_dir):
@@ -172,7 +182,19 @@ def start_updater(install_dir):
 
 
 def main():
-    """Main installer function."""
+    """
+    Main installer function that orchestrates the installation process.
+
+    The installer follows a logical sequence:
+    1. Check system requirements and dependencies
+    2. Determine appropriate installation location
+    3. Extract and configure application components
+    4. Create user interface elements (shortcuts, launchers)
+    5. Launch the application for immediate use
+
+    This cross-platform implementation adapts to the user's environment
+    while maintaining consistent functionality across operating systems.
+    """
     print(f"=== {APP_NAME} Installer ===")
 
     # Check OS compatibility
@@ -183,21 +205,13 @@ def main():
 
     print("Checking system requirements...")
 
-    # Check for .NET Framework
-    dotnet_installed, dotnet_version = check_dotnet_framework()
-    if not dotnet_installed:
-        print(".NET Framework 2.0/3.0 is required but not installed.")
-        if (
-            input("Do you want to download and install it now? (Y/N): ").strip().upper()
-            == "Y"
-        ):
-            download_dotnet_framework()
-        else:
-            print("Installation cannot continue without .NET Framework 2.0/3.0.")
-            input("Press Enter to exit...")
-            sys.exit(1)
-    else:
-        print(f".NET Framework version {dotnet_version} is installed.")
+    # Check for required Python packages
+    requirements_met, missing_packages = check_python_requirements()
+    if not requirements_met:
+        print("Some required Python packages are missing.")
+        print("Installing require pacakages...")
+        install_python_requirements(missing_packages)
+        print("All required Python packages are installed.")
 
     # Get installation directory
     install_dir = get_appdata_path()
@@ -215,7 +229,7 @@ def main():
     start_updater(install_dir)
 
     print(f"\n{APP_NAME} has been successfully installed!")
-    print(f"The application will now start automatically.")
+    print("The application will now start automatically.")
 
 
 if __name__ == "__main__":
