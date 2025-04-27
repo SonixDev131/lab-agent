@@ -1,15 +1,47 @@
+<<<<<<< HEAD
+from _typeshed import Self
 import logging
 import os
 import hashlib
 import json
 import subprocess
 import sys
+=======
+import logging
+import os
+import hashlib
+import json
+import subprocess
+import sys
+import argparse
+import platform
+from datetime import datetime
+>>>>>>> Snippet
+from update_server import UpdateServer
+from extractor import Extractor
+
+
+# Constants
+CURRENT_VERSION = "1.0.0"
+# Thay đổi từ GitHub API sang API tùy chỉnh
+UPDATE_SERVER_URL = "https://yourdomain.com"  # Thay bằng domain thực tế của bạn
+
+""""
+This module implements the core update mechanism for the Lab Agent application.
+The Updater class coordinates the update process by:
+1. Checking for available updates by comparing file hashes with the update server
+2. Downloading update packages when a new version is available
+3. Extracting updates to a temporary location
+4. Coordinating with the Extractor to replace current files
+5. Restarting the application after updates are complete
+
+The update process is designed to be resilient, with logging and error handling
+at each step to ensure the application remains functional even if updates fail.
+"""
 
 # Add parent directory to path so we can import from other modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from update_server import UpdateServer
-from extractor import Extractor
 
 # Configure logging
 logger = logging.getLogger("Updater")
@@ -22,6 +54,13 @@ class Updater:
     - Step 4: Download new package
     - Step 5: Extract files into temp folder, start Extractor
     - Step 8: Start the Application
+
+    The Updater follows a careful sequence to ensure safe application updates:
+    1. Generate hashes of existing files to identify what needs updating
+    2. Compare local state with the update server to determine if updates exist
+    3. Download and verify update packages when available
+    4. Hand off to the Extractor for the actual file replacement
+    5. Restart the application with the new version
     """
 
     def __init__(self, current_version, update_server_url):
@@ -33,6 +72,10 @@ class Updater:
 
     def create_file_hash_table(self):
         """Create hash table of all application files."""
+        # File hashing is a critical part of the update process:
+        # 1. Creates SHA-256 hashes of all application files
+        # 2. Ignores temporary files and directories that shouldn't be included
+        # 3. Produces a JSON manifest that can be compared with server versions
         logger.info("Đang tạo bảng hash cho các tệp hiện tại...")
 
         file_hashes = {}
@@ -81,12 +124,12 @@ class Updater:
 
     def download_update_package(self, package_info):
         """Download update package from Update Server."""
-        logger.info(f"Đang tải xuống gói cập nhật từ Update Server...")
+        logger.info("Đang tải xuống gói cập nhật từ Update Server...")
         return self.update_server.download_update(package_info["download_url"])
 
     def extract_update_package(self, update_file):
         """Extract update package to temporary directory."""
-        logger.info(f"Đang giải nén gói cập nhật vào thư mục tạm...")
+        logger.info("Đang giải nén gói cập nhật vào thư mục tạm...")
 
         # Create temp directory if it doesn't exist
         if not os.path.exists(self.temp_dir):
@@ -110,6 +153,12 @@ class Updater:
 
     def start_application(self):
         """Start the main application."""
+        # Application restart process:
+        # 1. Locates the main entry point (main.py) in the lab-agent-core directory
+        # 2. Launches it in a new process using the current Python interpreter
+        # 3. Exits the current process to allow the new instance to take over
+        #
+        # This approach ensures a clean restart after updates are applied
         logger.info("Khởi động lại ứng dụng...")
 
         # Get the path to the main script in the lab-agent-core folder
@@ -133,6 +182,11 @@ class Updater:
 
     def check_for_updates(self):
         """Check if updates are available."""
+        # Update checking workflow:
+        # 1. Generate hashes of all local files
+        # 2. Send the hash table to the update server
+        # 3. Server compares with latest version and responds with status
+        # 4. Returns whether an update is needed and version information
         try:
             # Step 2: Create hash table
             file_hashes = self.create_file_hash_table()
@@ -157,6 +211,15 @@ class Updater:
 
     def perform_update(self):
         """Perform the entire update process."""
+        # Main update orchestration function that:
+        # 1. Checks for available updates using the update server
+        # 2. Downloads the update package if a new version exists
+        # 3. Extracts files to a temporary location
+        # 4. Starts the extractor process to replace current files
+        # 5. The extractor will restart the application when complete
+        #
+        # Note: This function handles the preparation phase of updates,
+        # while the actual file replacement is managed by the Extractor
         try:
             # Step 2: Check for updates (includes creating and sending hash table)
             update_needed, latest_version, package_info = self.check_for_updates()
@@ -187,3 +250,140 @@ class Updater:
         except Exception as e:
             logger.error(f"Cập nhật thất bại: {e}")
             return False
+
+
+<<<<<<< HEAD
+def configure_logging():
+    """Configure logging for the updater."""
+    # Set up logging to file and console
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    logging.basicConfig(
+        level=logging.INFO,
+        format=log_format,
+        handlers=[logging.FileHandler("updater.log"), logging.StreamHandler()],
+    )
+=======
+def configure_logging(debug=False):
+    """Configure logging for the updater."""
+    # Create logs directory if it doesn't exist
+    logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # Create log file with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(logs_dir, f"updater_{timestamp}.log")
+    
+    # Set log level based on debug flag
+    log_level = logging.DEBUG if debug else logging.INFO
+    
+    # Set up logging to file and console
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    logging.basicConfig(
+        level=log_level,
+        format=log_format,
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+    
+    return log_file
+>>>>>>> Snippet
+
+
+def main():
+    """
+    Entry point for the updater.
+<<<<<<< HEAD
+    """
+
+    # Configure logging
+    configure_logging()
+
+    logger.info("Starting Lab Agent Updater...")
+    logger.info(f"Current version: {CURRENT_VERSION}")
+    logger.info(f"Update server: {UPDATE_SERVER_URL}")
+
+    # Initialize updater
+    updater = Updater(CURRENT_VERSION, UPDATE_SERVER_URL)
+
+    # Perform the full update process
+    success = updater.perform_update()
+
+    if not success:
+        logger.info("No updates were installed. Starting application...")
+        updater.start_application()
+=======
+    
+    When called directly, this function will:
+    1. Parse command-line arguments
+    2. Configure logging
+    3. Initialize the Updater with appropriate settings
+    4. Perform the update process
+    5. Handle startup based on update results
+    """
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Lab Agent Updater")
+    parser.add_argument("--version", default=CURRENT_VERSION, help="Current application version")
+    parser.add_argument("--server-url", default=UPDATE_SERVER_URL, help="Update server URL")
+    parser.add_argument("--check-only", action="store_true", help="Only check for updates without installing")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    args = parser.parse_args()
+    
+    # Configure logging
+    log_file = configure_logging(debug=args.debug)
+    
+    logger.info("Starting Lab Agent Updater...")
+    logger.info(f"Current version: {args.version}")
+    logger.info(f"Update server: {args.server_url}")
+    
+    # Log system information for debugging
+    logger.debug(f"System platform: {sys.platform}")
+    logger.debug(f"Python version: {sys.version}")
+    logger.debug(f"Platform details: {platform.platform()}")
+    logger.debug(f"Current working directory: {os.getcwd()}")
+    logger.debug(f"Script directory: {os.path.dirname(os.path.abspath(__file__))}")
+    
+    try:
+        # List files in the current directory
+        logger.debug(f"Files in current directory: {os.listdir()}")
+    except Exception as e:
+        logger.error(f"Failed to list current directory: {e}")
+    
+    # Initialize updater
+    updater = Updater(args.version, args.server_url)
+    
+    if args.check_only:
+        # Only check for updates
+        logger.info("Running in check-only mode")
+        update_needed, latest_version, _ = updater.check_for_updates()
+        if update_needed:
+            logger.info(f"Update available: {latest_version}")
+            return
+        else:
+            logger.info("No updates available")
+            return
+    
+    try:
+        # Perform the full update process
+        success = updater.perform_update()
+        
+        if not success:
+            logger.info("No updates were installed. Starting application...")
+            updater.start_application()
+    except Exception as e:
+        logger.error(f"Error during update process: {e}", exc_info=True)
+        print(f"Update process failed. Please check the log file at: {log_file}")
+>>>>>>> Snippet
+
+
+if __name__ == "__main__":
+<<<<<<< HEAD
+    main()
+=======
+    try:
+        main()
+    except Exception as e:
+        logger.critical(f"Unhandled exception in updater: {e}", exc_info=True)
+        print(f"An unexpected error occurred in the updater. Check logs for details.")
+>>>>>>> Snippet

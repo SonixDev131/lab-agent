@@ -2,13 +2,9 @@ import os
 import sys
 import shutil
 import subprocess
-import tempfile
-import winreg
-import zipfile
-import urllib.request
-import ctypes
-from pathlib import Path
-import json
+import logging
+import time
+from datetime import datetime
 
 # Application constants
 APP_NAME = "Lab Agent"
@@ -17,65 +13,38 @@ UPDATE_SERVER_URL = "https://yourdomain.com"  # Replace with your update server 
 VERSION = "1.0.0"
 
 
-def is_admin():
-    """Check if the current user has admin privileges."""
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0
-    except:
-        return False
+# Configure logging
+def configure_logging():
+    """Set up logging to both file and console."""
+    # Create logs directory if it doesn't exist
+    logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+
+    # Create log file with timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join(logs_dir, f"installer_{timestamp}.log")
+
+    # Configure logging
+    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format=log_format,
+        handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
+    )
+
+    return log_file
+
+
+# Initialize logger
+log_file = configure_logging()
+logger = logging.getLogger("Installer")
 
 
 def get_appdata_path():
     """Get the AppData\Local path for installing the application."""
-    return os.path.join(os.environ["LOCALAPPDATA"], APP_NAME)
-
-
-def check_python_requirements():
-    """
-    Check if all required Python packages are installed.
-
-    Returns (is_satisfied, missing_packages)
-    """
-    required_packages = [
-        "certifi",
-        "charset-normalizer",
-        "idna",
-        "requests",
-        "urllib3",
-        "psutil",
-        "pika",
-        "phpserialize",
-    ]
-
-    missing = []
-    for package in required_packages:
-        try:
-            __import__(package)
-        except ImportError:
-            missing.append(package)
-
-    return len(missing) == 0, missing
-
-
-def install_python_requirements(missing_packages):
-    """
-    Install missing Python packages.
-
-    This function installs any required Python packages that were found to be missing.
-    """
-    if not missing_packages:
-        return True
-
-    print(f"Installing missing Python packages: {', '.join(missing_packages)}")
-
-    try:
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install"] + missing_packages
-        )
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Error installing packages: {e}")
-        return False
+    path = os.path.join(os.environ["LOCALAPPDATA"], APP_NAME)
+    logger.debug(f"AppData path: {path}")
+    return path
 
 
 def extract_updater(install_dir):
@@ -88,80 +57,47 @@ def extract_updater(install_dir):
     3. Copies the updater components to the installation directory
     4. Generates a configuration file with version info and update server URL
     """
-    print(f"Installing to: {install_dir}")
+    logger.info(f"Installing to: {install_dir}")
 
-    # Create installation directory if it doesn't exist
-    os.makedirs(install_dir, exist_ok=True)
-
-    # Get the path to the embedded updater files
-    # Running from a PyInstaller bundle (_MEIPASS will be set)
-    bundle_dir = getattr(sys, "_MEIPASS", os.path.abspath(os.path.dirname(__file__)))
-
-    # Copy updater files
-    updater_files = ["updater.py", "update_server.py", "extractor.py"]
-    for file in updater_files:
-        src = os.path.join(bundle_dir, file)
-        dst = os.path.join(install_dir, file)
-        if os.path.exists(src):
-            shutil.copy2(src, dst)
-        else:
-            print(f"Warning: Could not find updater file: {src}")
-
-
-def create_shortcut(install_dir):
-    """
-    Create shortcuts to the Updater in Start Menu and Desktop.
-    """
     try:
-        import win32com.client
+        # Create installation directory if it doesn't exist
+        os.makedirs(install_dir, exist_ok=True)
+        logger.debug(f"Created installation directory: {install_dir}")
 
-        # Paths for shortcuts
-        start_menu_path = os.path.join(
-            os.environ["APPDATA"],
-            "Microsoft",
-            "Windows",
-            "Start Menu",
-            "Programs",
-            APP_PUBLISHER,
+        # Get the path to the embedded updater files
+        # Running from a PyInstaller bundle (_MEIPASS will be set)
+        bundle_dir = getattr(
+            sys, "_MEIPASS", os.path.abspath(os.path.dirname(__file__))
         )
-        desktop_path = os.path.join(os.environ["USERPROFILE"], "Desktop")
+        logger.debug(f"Bundle directory: {bundle_dir}")
+        logger.debug(f"Current working directory: {os.getcwd()}")
 
-        # Create Start Menu folder if it doesn't exist
-        os.makedirs(start_menu_path, exist_ok=True)
+        # List files in the bundle directory for debugging
+        try:
+            logger.debug(f"Files in bundle directory: {os.listdir(bundle_dir)}")
+        except Exception as e:
+            logger.error(f"Failed to list files in bundle directory: {e}")
 
-        # Path to the updater launcher script
-        updater_launcher = os.path.join(install_dir, "updater_launcher.bat")
+        # Copy updater files
+        updater_files = ["updater.py", "update_server.py", "extractor.py"]
+        for file in updater_files:
+            src = os.path.join(bundle_dir, file)
+            dst = os.path.join(install_dir, file)
+            if os.path.exists(src):
+                logger.debug(f"Copying {src} to {dst}")
+                shutil.copy2(src, dst)
+                logger.debug(f"File copied successfully: {file}")
+            else:
+                logger.warning(f"Could not find updater file: {src}")
 
-        # Create a batch file to launch the updater
-        with open(updater_launcher, "w") as f:
-            f.write("@echo off\n")
-            f.write(f'cd /d "{install_dir}"\n')
-            f.write("python updater.py\n")
+        # Copy log file to installation directory for reference
+        if os.path.exists(log_file):
+            log_dst = os.path.join(install_dir, "installer.log")
+            logger.debug(f"Copying log file to installation directory: {log_dst}")
+            shutil.copy2(log_file, log_dst)
 
-        # Create shortcuts
-        shell = win32com.client.Dispatch("WScript.Shell")
-
-        # Start Menu shortcut
-        shortcut = shell.CreateShortCut(
-            os.path.join(start_menu_path, f"{APP_NAME}.lnk")
-        )
-        shortcut.TargetPath = updater_launcher
-        shortcut.WorkingDirectory = install_dir
-        shortcut.Description = f"Launch {APP_NAME}"
-        shortcut.Save()
-
-        # Desktop shortcut
-        shortcut = shell.CreateShortCut(os.path.join(desktop_path, f"{APP_NAME}.lnk"))
-        shortcut.TargetPath = updater_launcher
-        shortcut.WorkingDirectory = install_dir
-        shortcut.Description = f"Launch {APP_NAME}"
-        shortcut.Save()
-
-        print("Shortcuts created successfully.")
-    except ImportError:
-        print("Warning: pywin32 not installed. Shortcuts not created.")
     except Exception as e:
-        print(f"Error creating shortcuts: {e}")
+        logger.error(f"Error during extraction process: {e}", exc_info=True)
 
 
 def start_updater(install_dir):
@@ -171,14 +107,38 @@ def start_updater(install_dir):
     updater_path = os.path.join(install_dir, "updater.py")
 
     if os.path.exists(updater_path):
-        print("Starting Updater...")
-        subprocess.Popen(
-            [sys.executable, updater_path],
-            cwd=install_dir,
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
-        )
+        logger.info("Starting Updater...")
+        try:
+            # Create arguments with debug flag
+            args = [
+                sys.executable,
+                updater_path,
+                "--debug",
+                f"--version={VERSION}",
+                f"--server-url={UPDATE_SERVER_URL}",
+            ]
+            logger.debug(f"Running updater with command: {' '.join(args)}")
+
+            # Get Python executable info for debugging
+            logger.debug(f"Python executable: {sys.executable}")
+            logger.debug(f"Python version: {sys.version}")
+
+            # Start the process
+            process = subprocess.Popen(
+                args,
+                cwd=install_dir,
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+            logger.debug(f"Updater process started with PID: {process.pid}")
+        except Exception as e:
+            logger.error(f"Failed to start updater: {e}", exc_info=True)
     else:
-        print(f"Error: Updater not found at {updater_path}")
+        logger.error(f"Error: Updater not found at {updater_path}")
+        # List directory contents for debugging
+        try:
+            logger.debug(f"Files in installation directory: {os.listdir(install_dir)}")
+        except Exception as e:
+            logger.error(f"Failed to list installation directory: {e}")
 
 
 def main():
@@ -195,43 +155,57 @@ def main():
     This cross-platform implementation adapts to the user's environment
     while maintaining consistent functionality across operating systems.
     """
-    print(f"=== {APP_NAME} Installer ===")
+    logger.info(f"=== {APP_NAME} Installer ===")
+    logger.info(f"Version: {VERSION}")
+    logger.info(f"System platform: {sys.platform}")
+    logger.info(f"System information: {sys.version}")
 
-    # Check OS compatibility
-    if sys.platform != "win32":
-        print("Error: This installer is only compatible with Windows.")
-        input("Press Enter to exit...")
-        sys.exit(1)
-
-    print("Checking system requirements...")
-
-    # Check for required Python packages
-    requirements_met, missing_packages = check_python_requirements()
-    if not requirements_met:
-        print("Some required Python packages are missing.")
-        print("Installing require pacakages...")
-        install_python_requirements(missing_packages)
-        print("All required Python packages are installed.")
-
-    # Get installation directory
-    install_dir = get_appdata_path()
-
-    # Extract updater
-    extract_updater(install_dir)
-
-    # Create shortcuts
     try:
-        create_shortcut(install_dir)
+        # Check OS compatibility
+        if sys.platform != "win32":
+            logger.error("Error: This installer is only compatible with Windows.")
+            input("Press Enter to exit...")
+            sys.exit(1)
+
+        # Log environment variables for debugging
+        logger.debug("Environment variables:")
+        for key, value in os.environ.items():
+            logger.debug(f"  {key}: {value}")
+
+        # Get installation directory
+        install_dir = get_appdata_path()
+
+        # Track installation time
+        start_time = time.time()
+
+        # Extract updater
+        extract_updater(install_dir)
+
+        # Log installation time
+        elapsed = time.time() - start_time
+        logger.info(f"Installation completed in {elapsed:.2f} seconds")
+
+        # Start the updater
+        start_updater(install_dir)
+
+        logger.info(f"\n{APP_NAME} has been successfully installed!")
+        logger.info("The application will now start automatically.")
+
     except Exception as e:
-        print(f"Warning: Could not create shortcuts: {e}")
-
-    # Start the updater
-    start_updater(install_dir)
-
-    print(f"\n{APP_NAME} has been successfully installed!")
-    print("The application will now start automatically.")
+        logger.critical(f"Installation failed with error: {e}", exc_info=True)
+        print(f"\nInstallation failed. Please check the log file at: {log_file}")
+        input("Press Enter to exit...")
 
 
 if __name__ == "__main__":
-    main()
-    input("\nPress Enter to exit the installer...")
+    try:
+        logger.info("Installer started")
+        main()
+        logger.info("Installer completed successfully")
+        input("\nPress Enter to exit the installer...")
+    except Exception as e:
+        logger.critical(f"Unhandled exception in installer: {e}", exc_info=True)
+        print(
+            f"\nAn unexpected error occurred. Please check the log file at: {log_file}"
+        )
+        input("Press Enter to exit...")
