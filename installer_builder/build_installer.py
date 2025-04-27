@@ -38,52 +38,45 @@ def build_installer():
     spec_content = """
 # -*- mode: python ; coding: utf-8 -*-
 
-block_cipher = None
-
-# Include the updater files as data
 added_files = [
     ('temp/updater.py', '.'),
     ('temp/update_server.py', '.'),
     ('temp/extractor.py', '.')
 ]
 
-a = Analysis(['installer.py'],
-             pathex=[],
-             binaries=[],
-             datas=added_files,
-             hiddenimports=['certifi', 'charset_normalizer', 'idna', 'requests', 
-                           'urllib3', 'psutil', 'pika', 'phpserialize'],
-             hookspath=[],
-             runtime_hooks=[],
-             excludes=[],
-             win_no_prefer_redirects=False,
-             win_private_assemblies=False,
-             cipher=block_cipher,
-             noarchive=False)
-             cipher=block_cipher,
-             noarchive=False)
-             cipher=block_cipher,
-             noarchive=False)
-             win_private_assemblies=False,
-             cipher=block_cipher,
-             noarchive=False)
-pyz = PYZ(a.pure, a.zipped_data,
-             cipher=block_cipher)
-exe = EXE(pyz,
-          a.scripts,
-          a.binaries,
-          a.zipfiles,
-          a.datas,
-          [],
-          name='LabAgentInstaller',
-          debug=False,
-          bootloader_ignore_signals=False,
-          strip=False,
-          upx=True,
-          upx_exclude=[],
-          runtime_tmpdir=None,
-          console=True,
-          icon='installer_icon.ico' if os.path.exists('installer_icon.ico') else None)
+a = Analysis(
+    ['installer.py'],
+    pathex=[],
+    binaries=[],
+    datas=added_files,
+    hiddenimports=[],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+
+pyz = PYZ(a.pure)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name='LabAgentInstaller',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    console=True,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+)
     """
 
     with open("installer.spec", "w") as f:
@@ -92,7 +85,7 @@ exe = EXE(pyz,
     # Run PyInstaller
     print("Running PyInstaller...")
     subprocess.check_call(
-        [sys.executable, "-m", "PyInstaller", "installer.spec", "--onefile", "--clean"]
+        [sys.executable, "-m", "PyInstaller", "installer.spec", "--clean"]
     )
 
     print("Installer built successfully! Find it in the 'dist' directory.")
