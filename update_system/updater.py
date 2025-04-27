@@ -252,17 +252,6 @@ class Updater:
             return False
 
 
-<<<<<<< HEAD
-def configure_logging():
-    """Configure logging for the updater."""
-    # Set up logging to file and console
-    log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    logging.basicConfig(
-        level=logging.INFO,
-        format=log_format,
-        handlers=[logging.FileHandler("updater.log"), logging.StreamHandler()],
-    )
-=======
 def configure_logging(debug=False):
     """Configure logging for the updater."""
     # Create logs directory if it doesn't exist
@@ -288,32 +277,11 @@ def configure_logging(debug=False):
     )
     
     return log_file
->>>>>>> Snippet
 
 
 def main():
     """
     Entry point for the updater.
-<<<<<<< HEAD
-    """
-
-    # Configure logging
-    configure_logging()
-
-    logger.info("Starting Lab Agent Updater...")
-    logger.info(f"Current version: {CURRENT_VERSION}")
-    logger.info(f"Update server: {UPDATE_SERVER_URL}")
-
-    # Initialize updater
-    updater = Updater(CURRENT_VERSION, UPDATE_SERVER_URL)
-
-    # Perform the full update process
-    success = updater.perform_update()
-
-    if not success:
-        logger.info("No updates were installed. Starting application...")
-        updater.start_application()
-=======
     
     When called directly, this function will:
     1. Parse command-line arguments
@@ -374,16 +342,11 @@ def main():
     except Exception as e:
         logger.error(f"Error during update process: {e}", exc_info=True)
         print(f"Update process failed. Please check the log file at: {log_file}")
->>>>>>> Snippet
 
 
 if __name__ == "__main__":
-<<<<<<< HEAD
-    main()
-=======
     try:
         main()
     except Exception as e:
         logger.critical(f"Unhandled exception in updater: {e}", exc_info=True)
         print(f"An unexpected error occurred in the updater. Check logs for details.")
->>>>>>> Snippet
