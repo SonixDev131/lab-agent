@@ -1,12 +1,3 @@
-<<<<<<< HEAD
-from _typeshed import Self
-import logging
-import os
-import hashlib
-import json
-import subprocess
-import sys
-=======
 import logging
 import os
 import hashlib
@@ -16,32 +7,12 @@ import sys
 import argparse
 import platform
 from datetime import datetime
->>>>>>> Snippet
-from update_server import UpdateServer
-from extractor import Extractor
-
-
-# Constants
-CURRENT_VERSION = "1.0.0"
-# Thay đổi từ GitHub API sang API tùy chỉnh
-UPDATE_SERVER_URL = "https://yourdomain.com"  # Thay bằng domain thực tế của bạn
-
-""""
-This module implements the core update mechanism for the Lab Agent application.
-The Updater class coordinates the update process by:
-1. Checking for available updates by comparing file hashes with the update server
-2. Downloading update packages when a new version is available
-3. Extracting updates to a temporary location
-4. Coordinating with the Extractor to replace current files
-5. Restarting the application after updates are complete
-
-The update process is designed to be resilient, with logging and error handling
-at each step to ensure the application remains functional even if updates fail.
-"""
 
 # Add parent directory to path so we can import from other modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from update_server import UpdateServer
+from extractor import Extractor
 
 # Configure logging
 logger = logging.getLogger("Updater")
@@ -50,64 +21,109 @@ logger = logging.getLogger("Updater")
 class Updater:
     """
     Central component that coordinates the update process.
-    - Step 2: Create hash table and send to Update Server
-    - Step 4: Download new package
-    - Step 5: Extract files into temp folder, start Extractor
-    - Step 8: Start the Application
-
-    The Updater follows a careful sequence to ensure safe application updates:
-    1. Generate hashes of existing files to identify what needs updating
-    2. Compare local state with the update server to determine if updates exist
-    3. Download and verify update packages when available
-    4. Hand off to the Extractor for the actual file replacement
-    5. Restart the application with the new version
+    - Takes inventory of files in its own directory
+    - Sends framework version and file hashes to the Update Server
+    - Downloads and extracts updates if needed
+    - Starts the Extractor for installation
     """
 
-    def __init__(self, current_version, update_server_url):
+    def __init__(self, current_version, update_server_url, framework_version="1.0"):
         self.current_version = current_version
         self.update_server = UpdateServer(update_server_url)
+        self.framework_version = (
+            framework_version  # Framework version the updater depends on
+        )
         self.extractor = None
         self.temp_dir = "update_temp"
         self.hash_file = "file_hashes.json"
 
+        # Set the working directory to where the updater resides
+        self.updater_dir = os.path.dirname(os.path.abspath(__file__))
+        logger.info(f"Updater directory: {self.updater_dir}")
+
+        # Check if this is a first-time run
+        self.is_first_run = self._check_first_run()
+        if self.is_first_run:
+            logger.info(
+                "First-time run detected - will request full application package"
+            )
+
+    def _check_first_run(self):
+        """
+        Determine if this is a first-time run of the updater.
+        Checks for the existence of essential application files.
+        """
+        # Define essential application files that should exist after first installation
+        parent_dir = os.path.dirname(self.updater_dir)
+        essential_files = [
+            os.path.join(parent_dir, "lab_agent_core", "main.py"),
+            os.path.join(parent_dir, "lab_agent_core", "command_listener.py"),
+            os.path.join(parent_dir, "config", "agent_config.json"),
+        ]
+
+        # If any essential file is missing, this is considered a first run
+        for file in essential_files:
+            if not os.path.exists(file):
+                logger.info(f"Essential file missing: {file}")
+                return True
+
+        # Check if hash file exists from previous runs
+        hash_file_path = os.path.join(self.updater_dir, self.hash_file)
+        if not os.path.exists(hash_file_path):
+            logger.info("No previous hash file found")
+            return True
+
+        return False
+
     def create_file_hash_table(self):
-        """Create hash table of all application files."""
-        # File hashing is a critical part of the update process:
-        # 1. Creates SHA-256 hashes of all application files
-        # 2. Ignores temporary files and directories that shouldn't be included
-        # 3. Produces a JSON manifest that can be compared with server versions
-        logger.info("Đang tạo bảng hash cho các tệp hiện tại...")
+        """
+        Create hash table of all application files in the updater's directory.
+        Uses SHA-256 for secure hashing.
+        """
+        logger.info("Creating hash table for current files...")
 
-        file_hashes = {}
-        ignored_dirs = [".git", "__pycache__", "agent_env", self.temp_dir]
-        ignored_files = [self.hash_file, "agent_new.zip", "updater_package.zip"]
+        # Save original working directory
+        original_dir = os.getcwd()
 
-        for root, dirs, files in os.walk("."):
-            # Skip ignored directories
-            dirs[:] = [d for d in dirs if d not in ignored_dirs]
+        try:
+            # Change to the updater directory to inventory files
+            os.chdir(self.updater_dir)
 
-            for file in files:
-                if file in ignored_files:
-                    continue
+            file_hashes = {}
+            ignored_dirs = [".git", "__pycache__", "agent_env", self.temp_dir]
+            ignored_files = [self.hash_file, "agent_new.zip", "updater_package.zip"]
 
-                file_path = os.path.join(root, file)
-                if os.path.isfile(file_path):
-                    try:
-                        file_hash = self._get_file_hash(file_path)
-                        # Use relative path as key
-                        rel_path = os.path.relpath(file_path)
-                        file_hashes[rel_path] = file_hash
-                    except Exception as e:
-                        logger.error(f"Lỗi khi tạo hash cho tệp {file_path}: {e}")
+            for root, dirs, files in os.walk("."):
+                # Skip ignored directories
+                dirs[:] = [d for d in dirs if d not in ignored_dirs]
 
-        # Save hash table to file
-        with open(self.hash_file, "w") as f:
-            json.dump(file_hashes, f, indent=2)
+                for file in files:
+                    if file in ignored_files:
+                        continue
 
-        logger.info(
-            f"Đã tạo hash cho {len(file_hashes)} tệp và lưu vào {self.hash_file}"
-        )
-        return file_hashes
+                    file_path = os.path.join(root, file)
+                    if os.path.isfile(file_path):
+                        try:
+                            file_hash = self._get_file_hash(file_path)
+                            # Use relative path as key
+                            rel_path = os.path.relpath(file_path)
+                            file_hashes[rel_path] = file_hash
+                        except Exception as e:
+                            logger.error(f"Error hashing file {file_path}: {e}")
+
+            # Save hash table to file
+            hash_file_path = os.path.join(self.updater_dir, self.hash_file)
+            with open(hash_file_path, "w") as f:
+                json.dump(file_hashes, f, indent=2)
+
+            logger.info(
+                f"Created hashes for {len(file_hashes)} files and saved to {hash_file_path}"
+            )
+            return file_hashes
+
+        finally:
+            # Restore original working directory
+            os.chdir(original_dir)
 
     def _get_file_hash(self, file_path):
         """Calculate SHA-256 hash of a file."""
@@ -118,67 +134,96 @@ class Updater:
         return sha256_hash.hexdigest()
 
     def send_hash_table_to_server(self, file_hashes):
-        """Send hash table to Update Server."""
-        logger.info("Đang gửi bảng hash đến Update Server...")
-        return self.update_server.send_hash_table(file_hashes, self.current_version)
+        """
+        Send hash table and framework version to Update Server.
+        This allows the server to determine if framework updates are needed.
+        If this is the first run, also notifies the server so it can provide a full application package.
+        """
+        logger.info(
+            f"Sending hash table to Update Server with framework version {self.framework_version}..."
+        )
+        return self.update_server.send_hash_table(
+            file_hashes,
+            self.current_version,
+            framework_version=self.framework_version,
+            is_first_run=self.is_first_run,
+        )
 
     def download_update_package(self, package_info):
-        """Download update package from Update Server."""
-        logger.info("Đang tải xuống gói cập nhật từ Update Server...")
-        return self.update_server.download_update(package_info["download_url"])
+        """
+        Download update package from Update Server.
+        Could be a delta package or full application if this is first install.
+        """
+        logger.info(f"Downloading update package from Update Server...")
+
+        # Save the update package in the updater's directory
+        target_file = os.path.join(self.updater_dir, "agent_new.zip")
+        return self.update_server.download_update(
+            package_info["download_url"], target_file
+        )
 
     def extract_update_package(self, update_file):
         """Extract update package to temporary directory."""
-        logger.info("Đang giải nén gói cập nhật vào thư mục tạm...")
+        logger.info("Extracting update package to temporary directory...")
 
-        # Create temp directory if it doesn't exist
-        if not os.path.exists(self.temp_dir):
-            os.makedirs(self.temp_dir, exist_ok=True)
+        # Create temp directory in updater's directory if it doesn't exist
+        extract_dir = os.path.join(self.updater_dir, self.temp_dir)
+        if not os.path.exists(extract_dir):
+            os.makedirs(extract_dir, exist_ok=True)
 
         # Create the Extractor instance
         self.extractor = Extractor()
 
         # Extract the update package
-        return self.extractor.extract_update(update_file, self.temp_dir)
+        return self.extractor.extract_update(update_file, extract_dir)
 
     def start_extractor(self):
-        """Start the Extractor to complete the update."""
-        logger.info("Khởi động Extractor...")
+        """
+        Start the Extractor to complete the update.
+        This is the handoff point where the updater delegates to the extractor.
+        """
+        logger.info("Starting Extractor...")
 
         if not self.extractor:
             self.extractor = Extractor()
 
-        # Tell extractor to clean and install
-        return self.extractor.process_update(self.temp_dir)
+        # Tell extractor to clean and install using path in the updater's directory
+        extract_dir = os.path.join(self.updater_dir, self.temp_dir)
+        return self.extractor.process_update(extract_dir)
 
     def start_application(self):
-        """Start the main application."""
-        # Application restart process:
-        # 1. Locates the main entry point (main.py) in the lab-agent-core directory
-        # 2. Launches it in a new process using the current Python interpreter
-        # 3. Exits the current process to allow the new instance to take over
-        #
-        # This approach ensures a clean restart after updates are applied
-        logger.info("Khởi động lại ứng dụng...")
+        """
+        Start the main application.
+        Tries multiple possible locations to find the main application entry point.
+        """
+        logger.info("Starting main application...")
 
-        # Get the path to the main script in the lab-agent-core folder
-        main_script = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "lab-agent-core",
-            "main.py",
-        )
+        # Try multiple possible paths for the main application
+        possible_paths = [
+            # Try lab_agent_core directory
+            os.path.join(
+                os.path.dirname(self.updater_dir), "lab_agent_core", "main.py"
+            ),
+            # Try run.py at root
+            os.path.join(os.path.dirname(self.updater_dir), "run.py"),
+            # Try directly at parent level
+            os.path.join(os.path.dirname(self.updater_dir), "main.py"),
+        ]
 
-        if os.path.exists(main_script):
-            logger.info(f"Khởi động main.py từ {main_script}...")
+        for main_script in possible_paths:
+            if os.path.exists(main_script):
+                logger.info(f"Starting application from {main_script}...")
 
-            # Start the application in a new process
-            subprocess.Popen([sys.executable, main_script])
+                # Start the application in a new process
+                subprocess.Popen(
+                    [sys.executable, main_script], cwd=os.path.dirname(main_script)
+                )
 
-            # Exit the current process
-            sys.exit(0)
-        else:
-            logger.error(f"Không tìm thấy tệp main.py tại đường dẫn: {main_script}")
-            return False
+                # Exit the current process
+                sys.exit(0)
+
+        logger.error("Could not find main.py or run.py to start")
+        return False
 
     def check_for_updates(self):
         """Check if updates are available."""
@@ -195,18 +240,18 @@ class Updater:
             response = self.send_hash_table_to_server(file_hashes)
 
             if not response:
-                logger.info("Không nhận được phản hồi từ Update Server.")
+                logger.info("No response from Update Server.")
                 return False, None, None
 
             if response.get("update_available", False):
                 latest_version = response.get("version")
-                logger.info(f"Phát hiện phiên bản mới: {latest_version}")
+                logger.info(f"Update available: {latest_version}")
                 return True, latest_version, response
             else:
-                logger.info("Đã ở phiên bản mới nhất.")
+                logger.info("No updates available, already on the latest version.")
                 return False, response.get("version"), None
         except Exception as e:
-            logger.error(f"Lỗi khi kiểm tra cập nhật: {e}")
+            logger.error(f"Error checking for updates: {e}")
             return False, None, None
 
     def perform_update(self):
@@ -225,30 +270,28 @@ class Updater:
             update_needed, latest_version, package_info = self.check_for_updates()
 
             if not update_needed:
-                logger.info("Không có cập nhật mới.")
+                logger.info("No new updates available.")
                 return False
 
             # Step 4: Download the update package
-            logger.info(f"Đang tải về phiên bản {latest_version}...")
+            logger.info(f"Downloading version {latest_version}...")
             update_file = self.download_update_package(package_info)
 
             # Step 5: Extract the update to a temp folder
-            logger.info("Đang giải nén gói cập nhật...")
+            logger.info("Extracting update package...")
             self.extract_update_package(update_file)
 
             # Step 5: Start the Extractor
-            logger.info("Khởi động Extractor để hoàn tất cập nhật...")
+            logger.info("Starting Extractor to complete the update...")
             self.start_extractor()
 
             # Note: After this point, Extractor will handle the rest and restart Updater if needed
             # We won't reach the next line unless the Extractor didn't properly restart the process
-            logger.warning(
-                "Extractor không khởi động lại quy trình Updater như dự kiến."
-            )
+            logger.warning("Extractor did not restart the Updater process as expected.")
 
             return True
         except Exception as e:
-            logger.error(f"Cập nhật thất bại: {e}")
+            logger.error(f"Update failed: {e}")
             return False
 
 
@@ -257,32 +300,29 @@ def configure_logging(debug=False):
     # Create logs directory if it doesn't exist
     logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
     os.makedirs(logs_dir, exist_ok=True)
-    
+
     # Create log file with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_file = os.path.join(logs_dir, f"updater_{timestamp}.log")
-    
+
     # Set log level based on debug flag
     log_level = logging.DEBUG if debug else logging.INFO
-    
+
     # Set up logging to file and console
     log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     logging.basicConfig(
         level=log_level,
         format=log_format,
-        handlers=[
-            logging.FileHandler(log_file),
-            logging.StreamHandler()
-        ]
+        handlers=[logging.FileHandler(log_file), logging.StreamHandler()],
     )
-    
+
     return log_file
 
 
 def main():
     """
     Entry point for the updater.
-    
+
     When called directly, this function will:
     1. Parse command-line arguments
     2. Configure logging
@@ -292,35 +332,43 @@ def main():
     """
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Lab Agent Updater")
-    parser.add_argument("--version", default=CURRENT_VERSION, help="Current application version")
-    parser.add_argument("--server-url", default=UPDATE_SERVER_URL, help="Update server URL")
-    parser.add_argument("--check-only", action="store_true", help="Only check for updates without installing")
+    parser.add_argument(
+        "--version", default=CURRENT_VERSION, help="Current application version"
+    )
+    parser.add_argument(
+        "--server-url", default=UPDATE_SERVER_URL, help="Update server URL"
+    )
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="Only check for updates without installing",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
-    
+
     # Configure logging
     log_file = configure_logging(debug=args.debug)
-    
+
     logger.info("Starting Lab Agent Updater...")
     logger.info(f"Current version: {args.version}")
     logger.info(f"Update server: {args.server_url}")
-    
+
     # Log system information for debugging
     logger.debug(f"System platform: {sys.platform}")
     logger.debug(f"Python version: {sys.version}")
     logger.debug(f"Platform details: {platform.platform()}")
     logger.debug(f"Current working directory: {os.getcwd()}")
     logger.debug(f"Script directory: {os.path.dirname(os.path.abspath(__file__))}")
-    
+
     try:
         # List files in the current directory
         logger.debug(f"Files in current directory: {os.listdir()}")
     except Exception as e:
         logger.error(f"Failed to list current directory: {e}")
-    
+
     # Initialize updater
     updater = Updater(args.version, args.server_url)
-    
+
     if args.check_only:
         # Only check for updates
         logger.info("Running in check-only mode")
@@ -331,11 +379,11 @@ def main():
         else:
             logger.info("No updates available")
             return
-    
+
     try:
         # Perform the full update process
         success = updater.perform_update()
-        
+
         if not success:
             logger.info("No updates were installed. Starting application...")
             updater.start_application()

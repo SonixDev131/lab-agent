@@ -18,17 +18,33 @@ class UpdateServer:
         self.version_endpoint = "/api/agent/version"
         self.update_endpoint = "/api/agent/update"
 
-    def send_hash_table(self, file_hashes, current_version):
+    def send_hash_table(
+        self, file_hashes, current_version, framework_version=None, is_first_run=False
+    ):
         """
         Send hash table to the update server and get delta package information.
         Uses the POST api/agent/update endpoint.
+
+        Parameters:
+        - file_hashes: Dictionary of file paths and their hashes
+        - current_version: Current application version
+        - framework_version: Current framework version (optional)
+        - is_first_run: Flag to indicate if this is the first run of the updater
+
+        If is_first_run is True, the server may send a full application package
+        instead of just delta updates.
         """
         try:
             payload = {
                 "version": current_version,
                 "hashes": file_hashes,
                 "platform": self._get_platform(),
+                "is_first_run": is_first_run,
             }
+
+            # Add framework version if provided
+            if framework_version:
+                payload["framework_version"] = framework_version
 
             # Construct update endpoint URL
             update_url = f"{self.base_url}{self.update_endpoint}"
@@ -45,8 +61,14 @@ class UpdateServer:
                 logger.info(
                     f"Nhận được thông tin gói từ server: {result.get('version', 'unknown')}"
                 )
-                # Check if update is needed
+
+                # Log whether this is a full package or delta update
                 if result.get("update_available", False):
+                    is_full_package = result.get("is_full_package", False)
+                    if is_full_package:
+                        logger.info("Sẽ tải về gói đầy đủ chứa toàn bộ ứng dụng")
+                    else:
+                        logger.info("Sẽ tải về gói cập nhật delta")
                     return result
                 else:
                     return {"update_available": False, "version": result.get("version")}
@@ -132,4 +154,3 @@ class UpdateServer:
             "architecture": platform.architecture()[0],
             "machine": platform.machine(),
         }
-

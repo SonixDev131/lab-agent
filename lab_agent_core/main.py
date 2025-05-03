@@ -7,13 +7,16 @@ import logging
 # Add parent directory to path so we can import from other modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Import from lab-agent-core
+# Import from lab_agent_core
 from metrics_collector import MetricsCollector
 from command_listener import CommandListener
 from registration import register_computer
 
-# Import from update-system
-from update_system.auto_updater import check_and_update
+# Import configuration system
+from config.config_loader import get_config, get_value
+
+# Import update system components directly
+from update_system.updater import Updater
 
 # Configure logging
 logging.basicConfig(
@@ -24,38 +27,77 @@ logging.basicConfig(
 logger = logging.getLogger("LabAgent")
 
 
-def main():
-    logger.info("Khởi động Lab Agent...")
-
-    # Kiểm tra cập nhật trước khi khởi động
-    logger.info("Kiểm tra cập nhật...")
+def check_for_updates():
+    """
+    Integrated update checker that checks directly for updates
+    instead of using the auto_updater module.
+    """
     try:
-        update_result = check_and_update()
-        if update_result:
-            logger.info(
-                "Đã khởi tạo quá trình cập nhật, ứng dụng sẽ khởi động lại sau khi hoàn tất."
-            )
-            # Quá trình cập nhật sẽ tự động khởi động lại ứng dụng sau khi hoàn tất
-            return
-        logger.info(
-            "Không có cập nhật mới hoặc cập nhật không thành công. Tiếp tục khởi động ứng dụng."
-        )
+        # Get configuration values
+        current_version = get_value("app_version", "1.0.0")
+        framework_version = get_value("framework_version", "1.0")
+        update_server_url = get_value("update_server_url", "https://yourdomain.com")
+        
+        logger.info(f"Checking for updates. Current version: {current_version}")
+        
+        # Initialize updater directly
+        updater = Updater(current_version, update_server_url, framework_version)
+        
+        # Check if updates are available
+        update_needed, latest_version, package_info = updater.check_for_updates()
+        
+        if update_needed:
+            logger.info(f"Update available: {latest_version}")
+            # Perform the update
+            success = updater.perform_update()
+            
+            if success:
+                logger.info("Update process initiated. Application will restart automatically.")
+                return True
+            else:
+                logger.warning("Update process failed or was cancelled.")
+                return False
+        else:
+            logger.info("No updates available. Starting application normally.")
+            return False
+            
     except Exception as e:
-        logger.error(f"Lỗi khi kiểm tra cập nhật: {e}")
-        logger.info("Bỏ qua quá trình cập nhật và tiếp tục khởi động ứng dụng.")
+        logger.error(f"Error checking for updates: {e}", exc_info=True)
+        return False
 
-    # Kiểm tra và đăng ký máy tính
+
+def main():
+    logger.info("Starting Lab Agent...")
+
+    # Load configuration
+    config = get_config()
+    logger.info(f"Current version: {config.get('app_version', '1.0.0')}")
+
+    # Check for updates before starting the application
+    logger.info("Checking for updates...")
+    try:
+        update_initiated = check_for_updates()
+        if update_initiated:
+            logger.info("Update process initiated. Application will exit and restart after update.")
+            # The update process will restart the application when complete
+            return
+        logger.info("No new updates or update check failed. Continuing with application startup.")
+    except Exception as e:
+        logger.error(f"Error during update check: {e}")
+        logger.info("Skipping update process and continuing with application startup.")
+
+    # Check and register computer
     computer_id, room_id = register_computer()
     if not computer_id or not room_id:
-        logger.error("Không thể đăng ký máy tính. Đang thoát...")
+        logger.error("Cannot register computer. Exiting...")
         exit(1)
 
-    # Khởi tạo các module
-    logger.info(f"Khởi tạo modules với computer_id={computer_id}, room_id={room_id}")
+    # Initialize modules
+    logger.info(f"Initializing modules with computer_id={computer_id}, room_id={room_id}")
     metrics = MetricsCollector(computer_id, room_id)
     listener = CommandListener(computer_id, room_id)
 
-    # Chạy các luồng
+    # Run threads
     metrics_thread = threading.Thread(target=metrics.start, name="MetricsThread")
     listener_thread = threading.Thread(
         target=listener.start, name="CommandListenerThread"
@@ -66,32 +108,35 @@ def main():
     metrics_thread.start()
     listener_thread.start()
 
-    logger.info("Tất cả các modules đã được khởi động.")
+    logger.info("All modules have been started.")
 
-    # Vòng lặp chính, giữ chương trình chạy
+    # Main loop, keep the program running
     try:
-        # Kiểm tra cập nhật định kỳ (mỗi 12 giờ)
-        update_interval = 12 * 60 * 60  # 12 giờ tính bằng giây
+        # Get update check interval from config (default to 12 hours if not set)
+        update_check_interval = get_value("update_check_interval", 12 * 60 * 60)
         last_update_check = time.time()
 
         while True:
             current_time = time.time()
 
-            # Kiểm tra cập nhật định kỳ
-            if current_time - last_update_check > update_interval:
-                logger.info("Đang kiểm tra cập nhật theo lịch...")
-                check_and_update()
+            # Check for updates periodically
+            if current_time - last_update_check > update_check_interval:
+                logger.info("Performing scheduled update check...")
+                update_initiated = check_for_updates()
+                if update_initiated:
+                    logger.info("Update initiated, application will restart.")
+                    break  # Exit the loop to allow the update process to take over
                 last_update_check = current_time
 
-            time.sleep(60)  # Kiểm tra mỗi phút
+            time.sleep(60)  # Check every minute
 
     except KeyboardInterrupt:
-        logger.info("Đã nhận được tín hiệu ngắt. Đang dừng agent...")
+        logger.info("Received interrupt signal. Stopping agent...")
         metrics.stop()
         listener.stop()
         metrics_thread.join(timeout=3)
         listener_thread.join(timeout=3)
-        logger.info("Agent đã dừng.")
+        logger.info("Agent stopped.")
 
 
 if __name__ == "__main__":

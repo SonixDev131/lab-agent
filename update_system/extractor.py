@@ -5,6 +5,7 @@ import logging
 import importlib
 import sys
 import time
+import subprocess
 
 # Add parent directory to path so we can import from other modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -99,27 +100,47 @@ class Extractor:
             return False
 
     def start_updater(self):
-        """Start the Updater component after installation."""
-        logger.info("Khởi động lại Updater...")
+        """Start the application after installation instead of restarting the updater."""
+        logger.info("Khởi động ứng dụng chính thay vì khởi động lại Updater...")
 
         try:
-            # Import the updater module with the correct path
-            from update_system.updater import Updater
-            from update_system.auto_updater import CURRENT_VERSION, UPDATE_SERVER_URL
+            # Get the path to the main script in the lab_agent_core folder
+            main_script = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "lab_agent_core",
+                "main.py",
+            )
 
-            # Wait briefly to ensure all file operations are complete
-            time.sleep(1)
+            if os.path.exists(main_script):
+                logger.info(f"Khởi động main.py từ {main_script}...")
 
-            # Create and start the updater to launch the application
-            updater = Updater(CURRENT_VERSION, UPDATE_SERVER_URL)
-            updater.start_application()
+                # Start the application in a new process
+                subprocess.Popen(
+                    [sys.executable, main_script], cwd=os.path.dirname(main_script)
+                )
 
-            return True
-        except ImportError as e:
-            logger.error(f"Không thể tìm thấy module updater.py: {e}")
-            return False
+                return True
+            else:
+                # Try to use run.py at the root as fallback
+                run_script = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "run.py",
+                )
+
+                if os.path.exists(run_script):
+                    logger.info(f"Khởi động run.py từ {run_script}...")
+                    subprocess.Popen(
+                        [sys.executable, run_script], cwd=os.path.dirname(run_script)
+                    )
+                    return True
+                else:
+                    logger.error(
+                        f"Không tìm thấy tệp main.py hoặc run.py để khởi động lại."
+                    )
+                    return False
+
         except Exception as e:
-            logger.error(f"Lỗi khi khởi động lại Updater: {e}")
+            logger.error(f"Lỗi khi khởi động ứng dụng: {e}")
             return False
 
     def process_update(self, extract_dir):
@@ -141,4 +162,3 @@ class Extractor:
         except Exception as e:
             logger.error(f"Lỗi trong quá trình cập nhật: {e}")
             return False
-
