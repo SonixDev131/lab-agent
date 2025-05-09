@@ -1,0 +1,9 @@
+{
+    "agent_version": "4.0.0",
+    "update_server_url": "http://localhost/api/agent/update",
+    "update_check_interval": 43200,
+    "mac_address": "08-8F-C3-0A-4A-C0",
+    "hostname": "DESKTOP-3Q7VLH9",
+    "room_id": "0196a9e2-9760-71ac-b8a7-af3e0f409ebd",
+    "computer_id": "0196a9e2-9bce-701a-9ec2-e7f5f11abf17"
+}
