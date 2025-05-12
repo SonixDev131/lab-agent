@@ -13,11 +13,13 @@ from typing import Any, Optional, Tuple
 
 import psutil
 import requests
+import subprocess
+import signal
 
 # ===================== LOGGER =====================
 logger = logging.getLogger("Agent")
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(), logging.FileHandler("agent.log")],
 )
@@ -27,10 +29,10 @@ AGENT_ZIP = "agent_new.zip"
 UPDATE_TEMP = "update_temp"
 CONFIG_FILE = "agent_config.json"
 HASH_FILE = "file_hashes.json"
-APP_URL = "http://localhost/api"
+APP_URL = "http://host.docker.internal/api"
 UPDATE_ENDPOINT = "/api/agent/delta-package"
-RABBITMQ_URL = "amqp://guest:guest@localhost:5672/"
-
+RABBITMQ_URL = "amqp://guest:guest@host.docker.internal:5672/"
+SERVICE_NAME = "LabAgentService"  # or your actual service name
 
 # ===================== CONFIG LOADER =====================
 def get_value(key: str, default: Any = None) -> Any:
@@ -158,10 +160,16 @@ def send_status_update(
 ) -> bool:
     try:
         import pika
-
+        logger.debug(f"Connecting to RabbitMQ at {rabbitmq_url}")
         connection = pika.BlockingConnection(pika.URLParameters(rabbitmq_url))
+        logger.debug("RabbitMQ connection established")
+        
         channel = connection.channel()
+        logger.debug("RabbitMQ channel created")
+        
         channel.queue_declare(queue="metrics", durable=True)
+        logger.debug("Queue 'metrics' declared")
+        
         status_data = {
             "computer_id": computer_id,
             "room_id": room_id,
@@ -169,6 +177,8 @@ def send_status_update(
             "timestamp": int(time.time()),
             "metrics": get_system_metrics(),
         }
+        logger.debug(f"Preparing to send status data: {json.dumps(status_data, indent=2)}")
+        
         channel.basic_publish(
             exchange="",
             routing_key="metrics",
@@ -178,21 +188,26 @@ def send_status_update(
                 content_type="application/json",
             ),
         )
+        logger.debug("Message published successfully")
+        
         connection.close()
+        logger.debug("RabbitMQ connection closed")
         logger.info(f"Status update sent: {status}")
         return True
     except Exception as e:
-        logger.error(f"[send_status_update] Error sending status update: {e}")
+        logger.error(f"[send_status_update] Error sending status update: {e}", exc_info=True)
         return False
 
 
 def metrics_heartbeat(
     computer_id: str, room_id: str, rabbitmq_url: str, interval: int, running_flag: list
 ) -> None:
+    logger.debug(f"Starting metrics heartbeat with interval: {interval} seconds")
     send_status_update(computer_id, room_id, rabbitmq_url, "online")
     while running_flag[0]:
         time.sleep(interval)
         if running_flag[0]:
+            logger.debug("Sending periodic status update")
             send_status_update(computer_id, room_id, rabbitmq_url, "online")
 
 
@@ -213,7 +228,14 @@ def process_command(command_data: dict) -> bool:
     try:
         command_type = command_data.get("command", "")
         logger.info(f"Processing command: {command_type}")
-        # Implement command handling here
+
+        if command_type == "UPDATE":
+            logger.info("Received update command. Initiating update process in a new thread...")
+            threading.Thread(target=check_for_updates, daemon=True).start()
+            return True
+
+        # Implement other command handling here
+
         return True
     except Exception as e:
         logger.error(f"[process_command] Error processing command: {e}")
@@ -248,25 +270,41 @@ def start_command_listener(
     import pika
 
     try:
+        logger.debug(f"Starting command listener with RabbitMQ URL: {rabbitmq_url}")
         with open(CONFIG_FILE, "r") as f:
             data = json.load(f)
             mac_address = data["mac_address"]
         queue_name = mac_address
+        logger.debug(f"Using queue name: {queue_name}")
+        
+        logger.debug("Establishing RabbitMQ connection for command listener")
         connection = pika.BlockingConnection(pika.URLParameters(rabbitmq_url))
         channel = connection.channel()
+        logger.debug("RabbitMQ channel created for command listener")
+        
         channel.queue_declare(queue=queue_name, durable=True)
+        logger.debug(f"Queue declared: {queue_name}")
+        
         channel.exchange_declare(
             exchange="cmd.direct", exchange_type="direct", durable=True
         )
+        logger.debug("Direct exchange declared: cmd.direct")
+        
         channel.queue_bind(
             exchange="cmd.direct",
             queue=queue_name,
             routing_key=f"room.{room_id}",
         )
+        logger.debug(f"Queue bound to direct exchange with routing key: room.{room_id}")
+        
         channel.exchange_declare(
             exchange="broadcast.fanout", exchange_type="fanout", durable=True
         )
+        logger.debug("Fanout exchange declared: broadcast.fanout")
+        
         channel.queue_bind(exchange="broadcast.fanout", queue=queue_name)
+        logger.debug(f"Queue bound to fanout exchange")
+        
         channel.basic_consume(
             queue=queue_name,
             on_message_callback=lambda ch, method, properties, body: command_callback(
@@ -274,14 +312,18 @@ def start_command_listener(
             ),
             auto_ack=False,
         )
+        logger.debug(f"Basic consume set up for queue: {queue_name}")
+        
         logger.info(
             f"Listening for commands for MAC={mac_address}, room={room_id}, computer_id={computer_id}"
         )
         while running_flag[0]:
             connection.process_data_events(time_limit=1.0)
+            
+        logger.debug("Command listener loop ended, closing connection")
         connection.close()
     except Exception as e:
-        logger.error(f"[start_command_listener] Error in command listener: {e}")
+        logger.error(f"[start_command_listener] Error in command listener: {e}", exc_info=True)
 
 
 # ===================== FILE HELPERS =====================
@@ -392,6 +434,39 @@ def check_for_updates_proc(
     return True, response.get("latest_version"), zip_file
 
 
+def build_main_exe(install_dir):
+    """Build main.exe from main.py using PyInstaller."""
+    import shutil
+    import subprocess
+    import os
+    logger.info("Building main.exe from updated main.py...")
+    main_py_path = os.path.join(install_dir, "main.py")
+    if not os.path.exists(main_py_path):
+        raise FileNotFoundError(f"main.py not found in {install_dir}")
+    dist_path = os.path.join(install_dir, "dist")
+    build_path = os.path.join(install_dir, "build")
+    # Clean output directories
+    shutil.rmtree(dist_path, ignore_errors=True)
+    shutil.rmtree(build_path, ignore_errors=True)
+    os.makedirs(dist_path, exist_ok=True)
+    result = subprocess.run([
+        "pyinstaller",
+        "-F",
+        main_py_path,
+        "--distpath", dist_path,
+        "--workpath", build_path,
+        "--specpath", install_dir
+    ], capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error(f"PyInstaller build failed: {result.stderr}")
+        raise RuntimeError("PyInstaller build failed")
+    main_exe = os.path.join(dist_path, "main.exe")
+    if not os.path.exists(main_exe):
+        raise FileNotFoundError(f"main.exe not found at {main_exe}")
+    logger.info(f"main.exe built successfully at {main_exe}")
+    return main_exe
+
+
 def perform_update_proc(
     current_version: str, update_server_url: str, updater_dir: str, hash_file: str
 ) -> bool:
@@ -408,9 +483,16 @@ def perform_update_proc(
         logger.info(f"Update extracted to {extract_dir}.")
         clean_installation()
         install_update(extract_dir)
+        # === Build lại main.exe sau khi update ===
+        try:
+            build_main_exe(os.getcwd())
+        except Exception as e:
+            logger.error(f"[perform_update_proc] Build main.exe failed after update: {e}")
+            return False
         clean_up(update_file=zip_file, extract_dir=extract_dir)
         set_value("agent_version", latest_version)
         start_updater()
+        restart_nssm_service()
         logger.info(
             f"Update process completed. Version updated to {latest_version}. Application should restart if needed."
         )
@@ -516,7 +598,24 @@ def start_updater() -> bool:
         return False
 
 
+def restart_nssm_service(service_name=SERVICE_NAME):
+    try:
+        subprocess.run(["nssm", "stop", service_name], check=True)
+        subprocess.run(["nssm", "start", service_name], check=True)
+        logger.info(f"Service '{service_name}' restarted successfully.")
+    except Exception as e:
+        logger.error(f"Failed to restart service '{service_name}': {e}")
+
+
 # ===================== MAIN LOGIC =====================
+def handle_shutdown_signal(signum=None, frame=None):
+    logger.info("Received shutdown signal, sending offline status...")
+    computer_id = get_value("computer_id")
+    room_id = get_value("room_id")
+    send_status_update(computer_id, room_id, RABBITMQ_URL, status="offline")
+    sys.exit(0)
+
+
 def main() -> None:
     logger.info("Starting Lab Agent...")
     logger.info(f"Current version: {get_value('app_version', '1.0.0')}")
@@ -551,6 +650,18 @@ def main() -> None:
     )
     command_thread.start()
     logger.info("All modules have been started.")
+    # Register signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, handle_shutdown_signal)
+    signal.signal(signal.SIGTERM, handle_shutdown_signal)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Shutting down agent...")
+        metrics_running[0] = False
+        command_running[0] = False
+        # Send offline status before exiting
+        send_status_update(computer_id, room_id, RABBITMQ_URL, status="offline")
 
 
 if __name__ == "__main__":
