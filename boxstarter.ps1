@@ -10,6 +10,10 @@ choco install -y python
 RefreshEnv
 git clone https://github.com/SonixDev131/lab-agent.git "$env:USERPROFILE\lab-agent"
 
+# Install python dependencies
+pip install -r "$env:USERPROFILE\lab-agent\requirements.txt"
+
+# Start service
 nssm install "agent" python "$env:USERPROFILE\lab-agent\main.py"
 nssm start agent
 
