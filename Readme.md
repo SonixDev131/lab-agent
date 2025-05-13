@@ -1,0 +1,1 @@
+START https://boxstarter.org/package/nr/url?https://raw.githubusercontent.com/SonixDev131/lab-agent/refs/heads/main/boxstarter.ps1
