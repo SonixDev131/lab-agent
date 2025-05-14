@@ -15,6 +15,7 @@ import psutil
 import requests
 import subprocess
 import signal
+import pika
 
 # ===================== LOGGER =====================
 logger = logging.getLogger("Agent")
@@ -159,7 +160,6 @@ def send_status_update(
     computer_id: str, room_id: str, rabbitmq_url: str, status: str = "online"
 ) -> bool:
     try:
-        import pika
         logger.debug(f"Connecting to RabbitMQ at {rabbitmq_url}")
         connection = pika.BlockingConnection(pika.URLParameters(rabbitmq_url))
         logger.debug("RabbitMQ connection established")
