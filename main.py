@@ -220,12 +220,12 @@ def start_metrics_thread(
 
 
 # ===================== COMMAND LISTENER =====================
-def process_command(command_data: dict) -> bool:
+def process_command(message: dict) -> bool:
     try:
-        command_type = command_data.get("command", "")
-        logger.info(f"Processing command: {command_type}")
+        type = message.get("type", "")
+        logger.info(f"Processing command: {type}")
 
-        if command_type == "UPDATE":
+        if type == "UPDATE":
             logger.info("Received update command. Initiating update process in a new thread...")
             threading.Thread(target=check_for_updates, daemon=True).start()
             return True
@@ -251,8 +251,7 @@ def command_callback(
         elif method.exchange == "":
             source = "DIRECT (MAC)"
         logger.info(f"Received message from {source}: {json.dumps(message, indent=2)}")
-        if "command" in message:
-            process_command(message)
+        process_command(message)
     except json.JSONDecodeError:
         logger.error(f"[command_callback] Cannot decode JSON: {body.decode('utf-8')}")
     except Exception as e:
