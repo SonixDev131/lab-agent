@@ -30,20 +30,26 @@ AGENT_ZIP = "agent_new.zip"
 UPDATE_TEMP = "update_temp"
 CONFIG_FILE = "agent_config.json"
 HASH_FILE = "file_hashes.json"
-APP_URL = "http://host.docker.internal/api"
-UPDATE_ENDPOINT = "/api/agent/delta-package"
+APP_URL = "http://host.docker.internal"
+UPDATE_ENDPOINT = "/api/agent/update"
 RABBITMQ_URL = "amqp://guest:guest@host.docker.internal:5672/"
 SERVICE_NAME = "LabAgentService"  # or your actual service name
+UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
+ZIP_PATH = os.path.join(UPDATER_DIR, AGENT_ZIP)
+EXTRACT_DIR = os.path.join(UPDATER_DIR, UPDATE_TEMP)
+CONFIG_KEYS = {"mac_address", "hostname", "room_id", "computer_id"}
+
 
 # ===================== CONFIG LOADER =====================
-def get_value(key: str, default: Any = None) -> Any:
+def get_config_info() -> dict:
     try:
         with open(CONFIG_FILE) as f:
             data = json.load(f)
-        return data.get(key, default)
+        # Chỉ lấy 4 trường cần thiết
+        return {k: data.get(k) for k in CONFIG_KEYS}
     except Exception as e:
-        logger.error(f"[get_value] Config read error: {e}")
-        return default
+        logger.error(f"[get_config_info] Config read error: {e}")
+        return {k: None for k in CONFIG_KEYS}
 
 
 def set_value(key: str, value: str) -> None:
@@ -87,8 +93,9 @@ def get_mac_address() -> Optional[str]:
 
 
 def register_computer() -> Tuple[Optional[str], Optional[str]]:
-    computer_id = get_value("computer_id")
-    room_id = get_value("room_id")
+    config = get_config_info()
+    computer_id = config["computer_id"]
+    room_id = config["room_id"]
     if computer_id and room_id:
         logger.info(f"Already registered: computer_id={computer_id}, room_id={room_id}")
         return computer_id, room_id
@@ -106,20 +113,9 @@ def register_computer() -> Tuple[Optional[str], Optional[str]]:
             if room_id and computer_id:
                 register_data["room_id"] = room_id
                 register_data["computer_id"] = computer_id
-                try:
-                    with open(CONFIG_FILE, "r+") as f:
-                        try:
-                            existing_data = json.load(f)
-                            existing_data.update(register_data)
-                            register_data = existing_data
-                        except json.JSONDecodeError:
-                            pass
-                        f.seek(0)
-                        json.dump(register_data, f, indent=4)
-                        f.truncate()
-                except FileNotFoundError:
-                    with open(CONFIG_FILE, "w") as f:
-                        json.dump(register_data, f, indent=4)
+                # Lưu lại 4 trường vào file config
+                with open(CONFIG_FILE, "w") as f:
+                    json.dump({k: register_data[k] for k in CONFIG_KEYS}, f, indent=4)
                 logger.info(
                     f"Registration successful: computer_id={computer_id}, room_id={room_id}"
                 )
@@ -338,31 +334,36 @@ def safe_remove(path: str) -> None:
     except Exception as e:
         logger.warning(f"[safe_remove] Failed to remove {path}: {e}")
 
+# ===================== EXTRACTOR LOGIC =====================
+def extract_update() -> str:
+    try:
+        if not os.path.exists(EXTRACT_DIR):
+            os.makedirs(EXTRACT_DIR, exist_ok=True)
+        with zipfile.ZipFile(ZIP_PATH, "r") as zip_ref:
+            zip_ref.extractall(EXTRACT_DIR)
+        logger.info(f"Update package extracted to: {EXTRACT_DIR}")
+        return EXTRACT_DIR
+    except Exception as e:
+        logger.error(f"[extract_update] Error extracting update package: {e}")
+        raise
 
 # ===================== UPDATER =====================
-def get_latest_version(current_version: str, update_server_url: str) -> Optional[dict]:
-    try:
-        response = requests.post(
-            f"{APP_URL}/agent/latest",
-            json={"agent_version": current_version},
-        )
-        response.raise_for_status()
-        return response.json()
-    except Exception as e:
-        logger.error(f"[get_latest_version] Error getting latest version: {e}")
-        return None
 
+def get_file_hash(file_path: str) -> str:
+    sha256_hash = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
 
-def create_file_hash_table(updater_dir: str, hash_file: str) -> dict:
-    logger.info("Creating hash table for current directory files only...")
+def create_file_hash_table() -> dict:
+    logger.info("Creating hash table for main.py and requirements.txt...")
     original_dir = os.getcwd()
     try:
-        os.chdir(updater_dir)
+        os.chdir(UPDATER_DIR)
         file_hashes = {}
-        ignored_files = [hash_file, AGENT_ZIP, "updater_package.zip", "agent.log"]
-        for file in os.listdir("."):
-            if file in ignored_files:
-                continue
+        target_files = ["main.py", "requirements.txt"]
+        for file in target_files:
             file_path = file
             if os.path.isfile(file_path):
                 try:
@@ -372,7 +373,7 @@ def create_file_hash_table(updater_dir: str, hash_file: str) -> dict:
                     logger.error(
                         f"[create_file_hash_table] Error hashing file {file_path}: {e}"
                     )
-        hash_file_path = os.path.join(updater_dir, hash_file)
+        hash_file_path = os.path.join(UPDATER_DIR, HASH_FILE)
         with open(hash_file_path, "w") as f:
             json.dump(file_hashes, f, indent=2)
         logger.info(
@@ -382,31 +383,22 @@ def create_file_hash_table(updater_dir: str, hash_file: str) -> dict:
     finally:
         os.chdir(original_dir)
 
-
-def get_file_hash(file_path: str) -> str:
-    sha256_hash = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()
-
-
 def send_hash_table_to_server(
-    update_server_url: str, file_hashes: dict, save_path: str
+    file_hashes: dict
 ) -> Optional[str]:
     try:
         response = requests.post(
-            f"{update_server_url}",
+            f"{APP_URL}{UPDATE_ENDPOINT}",
             json={"hash_table": file_hashes},
             stream=True,
         )
         if response.status_code == 200:
-            with open(save_path, "wb") as f:
+            with open(ZIP_PATH, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-            logger.info(f"Delta package zip file saved to {save_path}")
-            return save_path
+            logger.info(f"Delta package zip file saved to {ZIP_PATH}")
+            return ZIP_PATH
         else:
             logger.error(
                 f"[send_hash_table_to_server] Failed to download delta package: {response.status_code} - {response.text}"
@@ -417,186 +409,32 @@ def send_hash_table_to_server(
             f"[send_hash_table_to_server] Error downloading delta package: {e}"
         )
         return None
-
-
-def check_for_updates_proc(
-    current_version: str, update_server_url: str, updater_dir: str, hash_file: str
-) -> Tuple[bool, Optional[str], Optional[str]]:
-    response = get_latest_version(current_version, update_server_url)
-    if not response or response.get("is_latest"):
-        return False, current_version, None
-    file_hashes = create_file_hash_table(updater_dir, hash_file)
-    zip_path = os.path.join(updater_dir, AGENT_ZIP)
-    zip_file = send_hash_table_to_server(update_server_url, file_hashes, zip_path)
-    if not zip_file:
-        logger.info("No delta package received from Update Server.")
-        return False, None, None
-    return True, response.get("latest_version"), zip_file
-
-
-def build_main_exe(install_dir):
-    """Build main.exe from main.py using PyInstaller."""
-    import shutil
-    import subprocess
-    import os
-    logger.info("Building main.exe from updated main.py...")
-    main_py_path = os.path.join(install_dir, "main.py")
-    if not os.path.exists(main_py_path):
-        raise FileNotFoundError(f"main.py not found in {install_dir}")
-    dist_path = os.path.join(install_dir, "dist")
-    build_path = os.path.join(install_dir, "build")
-    # Clean output directories
-    shutil.rmtree(dist_path, ignore_errors=True)
-    shutil.rmtree(build_path, ignore_errors=True)
-    os.makedirs(dist_path, exist_ok=True)
-    result = subprocess.run([
-        "pyinstaller",
-        "-F",
-        main_py_path,
-        "--distpath", dist_path,
-        "--workpath", build_path,
-        "--specpath", install_dir
-    ], capture_output=True, text=True)
-    if result.returncode != 0:
-        logger.error(f"PyInstaller build failed: {result.stderr}")
-        raise RuntimeError("PyInstaller build failed")
-    main_exe = os.path.join(dist_path, "main.exe")
-    if not os.path.exists(main_exe):
-        raise FileNotFoundError(f"main.exe not found at {main_exe}")
-    logger.info(f"main.exe built successfully at {main_exe}")
-    return main_exe
-
-
-def perform_update_proc(
-    current_version: str, update_server_url: str, updater_dir: str, hash_file: str
-) -> bool:
-    update_needed, latest_version, zip_file = check_for_updates_proc(
-        current_version, update_server_url, updater_dir, hash_file
-    )
-    if not update_needed:
-        logger.info("No new updates available.")
-        return False
-    logger.info(f"Delta package zip file ready at {zip_file}")
-    extract_dir = os.path.join(updater_dir, UPDATE_TEMP)
+    
+def install_update() -> bool:
     try:
-        extract_update(zip_file, extract_dir)
-        logger.info(f"Update extracted to {extract_dir}.")
-        clean_installation()
-        install_update(extract_dir)
-        # === Build lại main.exe sau khi update ===
-        try:
-            build_main_exe(os.getcwd())
-        except Exception as e:
-            logger.error(f"[perform_update_proc] Build main.exe failed after update: {e}")
-            return False
-        clean_up(update_file=zip_file, extract_dir=extract_dir)
-        set_value("agent_version", latest_version)
-        start_updater()
-        restart_nssm_service()
-        logger.info(
-            f"Update process completed. Version updated to {latest_version}. Application should restart if needed."
-        )
-        return True
-    except Exception as e:
-        logger.error(f"[perform_update_proc] Update installation failed: {e}")
-        return False
-
-
-def check_for_updates() -> bool:
-    current_version = get_value("agent_version", "1.0.0")
-    update_server_url = get_value("update_server_url", "https://yourdomain.com")
-    updater_dir = os.path.dirname(os.path.abspath(__file__))
-    hash_file = HASH_FILE
-    if not current_version or not update_server_url:
-        logger.error(
-            "[check_for_updates] Missing configuration values for update check."
-        )
-        return False
-    logger.info(f"Checking for updates. Current version: {current_version}")
-    return perform_update_proc(
-        current_version, update_server_url, updater_dir, hash_file
-    )
-
-
-# ===================== EXTRACTOR LOGIC =====================
-def extract_update(update_file: str = AGENT_ZIP, extract_dir: str = UPDATE_TEMP) -> str:
-    try:
-        if not os.path.exists(extract_dir):
-            os.makedirs(extract_dir, exist_ok=True)
-        with zipfile.ZipFile(update_file, "r") as zip_ref:
-            zip_ref.extractall(extract_dir)
-        logger.info(f"Đã giải nén gói cập nhật vào: {extract_dir}")
-        return extract_dir
-    except Exception as e:
-        logger.error(f"[extract_update] Lỗi khi giải nén gói cập nhật: {e}")
-        raise
-
-
-def clean_installation() -> bool:
-    logger.info("Đang dọn dẹp cài đặt trước khi cập nhật...")
-    temp_files = [AGENT_ZIP, "updater_package.zip", HASH_FILE, "__pycache__"]
-    for item in temp_files:
-        safe_remove(item)
-    return True
-
-
-def install_update(extract_dir: str = UPDATE_TEMP) -> bool:
-    try:
-        for root, dirs, files in os.walk(extract_dir):
+        for root, dirs, files in os.walk(EXTRACT_DIR):
             for file in files:
                 src = os.path.join(root, file)
-                rel_path = os.path.relpath(src, extract_dir)
+                rel_path = os.path.relpath(src, EXTRACT_DIR)
                 dst = os.path.join(os.getcwd(), rel_path)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 os.replace(src, dst)
-                logger.info(f"Đã cài đặt: {rel_path}")
-        logger.info("Hoàn tất cài đặt cập nhật")
+                logger.info(f"Installed: {rel_path}")
+        logger.info("Update installation completed")
         return True
     except Exception as e:
-        logger.error(f"[install_update] Lỗi khi cài đặt cập nhật: {e}")
+        logger.error(f"[install_update] Error installing update: {e}")
         raise
 
-
-def clean_up(update_file: str = AGENT_ZIP, extract_dir: str = UPDATE_TEMP) -> bool:
+def clean_up() -> bool:
     try:
-        safe_remove(update_file)
-        safe_remove(extract_dir)
-        logger.info("Đã dọn dẹp các tệp tạm")
+        safe_remove(AGENT_ZIP)
+        safe_remove(EXTRACT_DIR)
+        logger.info("Temporary files cleaned up")
         return True
     except Exception as e:
-        logger.error(f"[clean_up] Lỗi khi dọn dẹp: {e}")
+        logger.error(f"[clean_up] Error during cleanup: {e}")
         return False
-
-
-def start_updater() -> bool:
-    import subprocess
-    import sys
-
-    logger.info("Khởi động ứng dụng chính thay vì khởi động lại Updater...")
-    try:
-        # Get the directory where this script is located
-        agent_dir = os.path.dirname(os.path.abspath(__file__))
-
-        main_script = os.path.join(agent_dir, "main.py")
-        if os.path.exists(main_script):
-            logger.info(f"Khởi động main.py từ {main_script}...")
-            subprocess.Popen([sys.executable, main_script], cwd=agent_dir)
-            return True
-        else:
-            run_script = os.path.join(agent_dir, "run.py")
-            if os.path.exists(run_script):
-                logger.info(f"Khởi động run.py từ {run_script}...")
-                subprocess.Popen([sys.executable, run_script], cwd=agent_dir)
-                return True
-            else:
-                logger.error(
-                    "[start_updater] Không tìm thấy tệp main.py hoặc run.py để khởi động lại."
-                )
-                return False
-    except Exception as e:
-        logger.error(f"[start_updater] Lỗi khi khởi động ứng dụng: {e}")
-        return False
-
 
 def restart_nssm_service(service_name=SERVICE_NAME):
     try:
@@ -606,33 +444,47 @@ def restart_nssm_service(service_name=SERVICE_NAME):
     except Exception as e:
         logger.error(f"Failed to restart service '{service_name}': {e}")
 
+def check_for_updates() -> bool:
+    try:
+        # Create hash table and send to server
+        file_hashes = create_file_hash_table()
+        zip_file = send_hash_table_to_server(file_hashes)
+        if not zip_file:
+            logger.info("No delta package received from Update Server.")
+            return False
+
+        # Extract and install update
+        extract_update()
+        logger.info(f"Update extracted to {EXTRACT_DIR}.")
+        install_update()
+
+        # Cleanup and restart
+        clean_up()
+        restart_nssm_service()
+        logger.info("Update process completed.")
+        return True
+
+    except Exception as e:
+        logger.error(f"[check_for_updates] Update process failed: {e}")
+        return False
+
+
 
 # ===================== MAIN LOGIC =====================
 def handle_shutdown_signal(signum=None, frame=None):
     logger.info("Received shutdown signal, sending offline status...")
-    computer_id = get_value("computer_id")
-    room_id = get_value("room_id")
+    computer_id = get_config_info().get("computer_id")
+    room_id = get_config_info().get("room_id")
     send_status_update(computer_id, room_id, RABBITMQ_URL, status="offline")
     sys.exit(0)
 
 
 def main() -> None:
     logger.info("Starting Lab Agent...")
-    logger.info(f"Current version: {get_value('app_version', '1.0.0')}")
+
     logger.info("Checking for updates...")
-    try:
-        update_initiated = check_for_updates()
-        if update_initiated:
-            logger.info(
-                "Update process initiated. Application will exit and restart after update."
-            )
-            sys.exit(0)
-        logger.info(
-            "No new updates or update check failed. Continuing with application startup."
-        )
-    except Exception as e:
-        logger.error(f"[main] Error during update check: {e}")
-        logger.info("Skipping update process and continuing with application startup.")
+    check_for_updates()
+
     computer_id, room_id = register_computer()
     if not computer_id or not room_id:
         logger.error("Cannot register computer. Exiting...")
