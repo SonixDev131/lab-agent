@@ -20,7 +20,7 @@ import pika
 # ===================== LOGGER =====================
 logger = logging.getLogger("Agent")
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[logging.StreamHandler(), logging.FileHandler("agent.log")],
 )
@@ -31,6 +31,7 @@ UPDATE_TEMP = "update_temp"
 CONFIG_FILE = "agent_config.json"
 HASH_FILE = "file_hashes.json"
 APP_URL = "http://host.docker.internal"
+REGISTER_ENDPOINT = "/api/agent/register"
 UPDATE_ENDPOINT = "/api/agent/update"
 RABBITMQ_URL = "amqp://guest:guest@host.docker.internal:5672/"
 SERVICE_NAME = "LabAgentService"  # or your actual service name
@@ -105,7 +106,7 @@ def register_computer() -> Tuple[Optional[str], Optional[str]]:
             "hostname": platform.node(),
         }
         logger.info(f"Registering computer: {register_data}")
-        response = requests.post(f"{APP_URL}/agents/register", json=register_data)
+        response = requests.post(f"{APP_URL}{REGISTER_ENDPOINT}", json=register_data)
         if response.status_code == 200:
             result = response.json()
             room_id = result.get("room_id")
@@ -361,7 +362,7 @@ def create_file_hash_table() -> dict:
     try:
         os.chdir(UPDATER_DIR)
         file_hashes = {}
-        target_files = ["main.py", "requirements.txt"]
+        target_files = ["main.py", "requirements.txt", "README.md"]
         for file in target_files:
             file_path = file
             if os.path.isfile(file_path):
@@ -513,6 +514,17 @@ def main() -> None:
         command_running[0] = False
         # Send offline status before exiting
         send_status_update(computer_id, room_id, RABBITMQ_URL, status="offline")
+
+     # Đăng ký signal handlers cho Windows Service
+    signal.signal(signal.SIGINT, handle_shutdown_signal)
+    signal.signal(signal.SIGTERM, handle_shutdown_signal)
+    signal.signal(signal.SIGBREAK, handle_shutdown_signal)  # Thêm dòng này cho NSSM
+    
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        handle_shutdown_signal()
 
 
 if __name__ == "__main__":

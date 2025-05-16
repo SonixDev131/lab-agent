@@ -15,6 +15,8 @@ pip install -r "$env:USERPROFILE\lab-agent\requirements.txt"
 
 # Start service
 nssm install "agent" python "$env:USERPROFILE\lab-agent\main.py"
+nssm set "agent" AppStdout "$env:USERPROFILE\lab-agent\service-output.txt"
+nssm set "agent" AppStderr "$env:USERPROFILE\lab-agent\service-error.txt"
 nssm start agent
 
 #--- reenabling critial items ---
