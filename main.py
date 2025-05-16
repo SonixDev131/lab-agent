@@ -452,17 +452,31 @@ def clean_up() -> bool:
 
 def restart_nssm_service():
     try:
-        logger.info("Preparing to restart service...")
-        time.sleep(3)  # Đảm bảo các kết nối đóng hoàn toàn
+        # Bỏ qua các tín hiệu ngắt trong quá trình restart
+        original_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        original_sigterm = signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
+        logger.info("Waiting for 5 seconds before restart...")
+        time.sleep(5)
+
+        logger.info(f"Restarting service {SERVICE_NAME}")
         subprocess.run(
             ["nssm", "restart", SERVICE_NAME],
             check=True,
+            timeout=30,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
         logger.info(f"Service '{SERVICE_NAME}' restarted successfully.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"NSSM restart failed with error code {e.returncode}")
+    except subprocess.TimeoutExpired:
+        logger.error("Service restart timed out after 30 seconds")
     except Exception as e:
-        logger.error(f"Failed to restart service '{SERVICE_NAME}': {e}")
+        logger.error(f"Unexpected error during restart: {e}")
+    finally:
+        # Khôi phục lại signal handlers
+        signal.signal(signal.SIGINT, original_sigint)
+        signal.signal(signal.SIGTERM, original_sigterm)
 
 
 def check_for_updates() -> bool:
@@ -525,7 +539,6 @@ def main() -> None:
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, handle_shutdown_signal)
     signal.signal(signal.SIGTERM, handle_shutdown_signal)
-    signal.signal(signal.SIGBREAK, handle_shutdown_signal)  # Thêm dòng này cho NSSM
 
     try:
         while True:
