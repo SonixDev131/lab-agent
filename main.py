@@ -5,7 +5,6 @@ import os
 import platform
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import threading
@@ -39,7 +38,6 @@ UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
 ZIP_PATH = os.path.join(UPDATER_DIR, AGENT_ZIP)
 EXTRACT_DIR = os.path.join(UPDATER_DIR, UPDATE_TEMP)
 CONFIG_KEYS = {"mac_address", "hostname", "room_id", "computer_id"}
-RESTARTING_EVENT = threading.Event()
 
 
 # ===================== CONFIG LOADER =====================
@@ -453,12 +451,6 @@ def clean_up() -> bool:
 
 def restart_nssm_service():
     try:
-        RESTARTING_EVENT.set()  # Mark restart in progress
-
-        # Get current signal handlers in main thread first
-        original_sigint = signal.getsignal(signal.SIGINT)
-        original_sigterm = signal.getsignal(signal.SIGTERM)
-
         logger.info("Waiting for 5 seconds before restart...")
         time.sleep(5)
 
@@ -467,7 +459,6 @@ def restart_nssm_service():
             ["nssm", "restart", SERVICE_NAME],
             check=True,
             timeout=30,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
         logger.info(f"Service '{SERVICE_NAME}' restarted successfully.")
     except subprocess.CalledProcessError as e:
@@ -476,12 +467,6 @@ def restart_nssm_service():
         logger.error("Service restart timed out after 30 seconds")
     except Exception as e:
         logger.error(f"Unexpected error during restart: {e}")
-    finally:
-        RESTARTING_EVENT.clear()  # Cleanup flag
-        # Restore signals only in main thread
-        if threading.current_thread() is threading.main_thread():
-            signal.signal(signal.SIGINT, original_sigint)
-            signal.signal(signal.SIGTERM, original_sigterm)
 
 
 def check_for_updates() -> bool:
@@ -500,7 +485,7 @@ def check_for_updates() -> bool:
 
         # Cleanup and restart
         clean_up()
-        threading.Thread(target=restart_nssm_service, daemon=True).start()
+        restart_nssm_service()
         logger.info("Update process completed.")
         return True
 
@@ -510,11 +495,7 @@ def check_for_updates() -> bool:
 
 
 # ===================== MAIN LOGIC =====================
-def handle_shutdown_signal(signum=None, frame=None):
-    if RESTARTING_EVENT.is_set():
-        logger.info("Skipping offline status during restart")
-        sys.exit(0)
-
+def handle_shutdown_signal():
     logger.info("Received shutdown signal, sending offline status...")
     computer_id = get_config_info().get("computer_id")
     room_id = get_config_info().get("room_id")
@@ -527,7 +508,7 @@ def main() -> None:
     logger.info("Starting Lab Agent...")
 
     logger.info("Checking for updates...")
-    # check_for_updates()
+    check_for_updates()
 
     computer_id, room_id = register_computer()
     if not computer_id or not room_id:
@@ -546,9 +527,6 @@ def main() -> None:
     )
     command_thread.start()
     logger.info("All modules have been started.")
-    # Register signal handlers for graceful shutdown
-    signal.signal(signal.SIGINT, handle_shutdown_signal)
-    signal.signal(signal.SIGTERM, handle_shutdown_signal)
 
     try:
         while True:
@@ -558,7 +536,7 @@ def main() -> None:
         metrics_running[0] = False
         command_running[0] = False
         # Send offline status before exiting
-        send_status_update(computer_id, room_id, RABBITMQ_URL, status="offline")
+        handle_shutdown_signal()
 
 
 if __name__ == "__main__":
