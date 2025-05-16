@@ -471,14 +471,20 @@ def check_for_updates() -> bool:
         # Create hash table and send to server
         file_hashes = create_file_hash_table()
         zip_file = send_hash_table_to_server(file_hashes)
-        if not zip_file:
+        update_needed = zip_file is not None
+        if not update_needed:
             logger.info("No delta package received from Update Server.")
             return False
-
-        # Extract and install update
-        extract_update()
-        logger.info(f"Update extracted to {EXTRACT_DIR}.")
-        install_update()
+        else:
+            logger.info("Update needed. Exiting for external restart.")
+            # Extract and install update
+            extract_update()
+            logger.info(f"Update extracted to {EXTRACT_DIR}.")
+            install_update()
+            # Optionally, create a flag file to signal the need for restart
+            with open("restart.flag", "w") as f:
+                f.write("restart needed")
+            sys.exit(0)
 
         # Cleanup and restart
         clean_up()
