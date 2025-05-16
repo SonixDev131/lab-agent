@@ -525,6 +525,8 @@ def main() -> None:
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, handle_shutdown_signal)
     signal.signal(signal.SIGTERM, handle_shutdown_signal)
+    signal.signal(signal.SIGBREAK, handle_shutdown_signal)  # Thêm dòng này cho NSSM
+
     try:
         while True:
             time.sleep(1)
@@ -534,15 +536,6 @@ def main() -> None:
         command_running[0] = False
         # Send offline status before exiting
         send_status_update(computer_id, room_id, RABBITMQ_URL, status="offline")
-
-    # Đăng ký signal handlers cho Windows Service
-    signal.signal(signal.SIGBREAK, handle_shutdown_signal)  # Thêm dòng này cho NSSM
-
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        handle_shutdown_signal()
 
 
 if __name__ == "__main__":
