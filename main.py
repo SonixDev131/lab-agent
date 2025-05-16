@@ -34,7 +34,7 @@ APP_URL = "http://host.docker.internal"
 REGISTER_ENDPOINT = "/api/agent/register"
 UPDATE_ENDPOINT = "/api/agent/update"
 RABBITMQ_URL = "amqp://guest:guest@host.docker.internal:5672/"
-SERVICE_NAME = "LabAgentService"  # or your actual service name
+SERVICE_NAME = "agent"  # or your actual service name
 UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
 ZIP_PATH = os.path.join(UPDATER_DIR, AGENT_ZIP)
 EXTRACT_DIR = os.path.join(UPDATER_DIR, UPDATE_TEMP)
@@ -436,13 +436,12 @@ def clean_up() -> bool:
         logger.error(f"[clean_up] Error during cleanup: {e}")
         return False
 
-def restart_nssm_service(service_name=SERVICE_NAME):
+def restart_nssm_service():
     try:
-        subprocess.run(["nssm", "stop", service_name], check=True)
-        subprocess.run(["nssm", "start", service_name], check=True)
-        logger.info(f"Service '{service_name}' restarted successfully.")
+        subprocess.run(["nssm", "restart", SERVICE_NAME], check=True)
+        logger.info(f"Service '{SERVICE_NAME}' restarted successfully.")
     except Exception as e:
-        logger.error(f"Failed to restart service '{service_name}': {e}")
+        logger.error(f"Failed to restart service '{SERVICE_NAME}': {e}")
 
 def check_for_updates() -> bool:
     try:
