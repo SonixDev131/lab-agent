@@ -452,9 +452,14 @@ def clean_up() -> bool:
 
 def restart_nssm_service():
     try:
-        # Bỏ qua các tín hiệu ngắt trong quá trình restart
-        original_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN)
-        original_sigterm = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        # Get current signal handlers in main thread first
+        original_sigint = signal.getsignal(signal.SIGINT)
+        original_sigterm = signal.getsignal(signal.SIGTERM)
+
+        # Ignore signals only if we're in main thread
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
         logger.info("Waiting for 5 seconds before restart...")
         time.sleep(5)
@@ -474,9 +479,10 @@ def restart_nssm_service():
     except Exception as e:
         logger.error(f"Unexpected error during restart: {e}")
     finally:
-        # Khôi phục lại signal handlers
-        signal.signal(signal.SIGINT, original_sigint)
-        signal.signal(signal.SIGTERM, original_sigterm)
+        # Restore signals only in main thread
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(signal.SIGINT, original_sigint)
+            signal.signal(signal.SIGTERM, original_sigterm)
 
 
 def check_for_updates() -> bool:
@@ -514,6 +520,7 @@ def handle_shutdown_signal(signum=None, frame=None):
 
 
 def main() -> None:
+    print("Starting Lab Agent...")
     logger.info("Starting Lab Agent...")
 
     logger.info("Checking for updates...")
