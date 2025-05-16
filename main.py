@@ -451,20 +451,17 @@ def clean_up() -> bool:
 
 def restart_nssm_service():
     try:
-        logger.info("Waiting for 5 seconds before restart...")
-        time.sleep(5)
-
         logger.info(f"Restarting service {SERVICE_NAME}")
         subprocess.run(
             ["nssm", "restart", SERVICE_NAME],
             check=True,
-            timeout=30,
+            capture_output=True,
         )
-        logger.info(f"Service '{SERVICE_NAME}' restarted successfully.")
+        logging.info(f"Service {SERVICE_NAME} restarted successfully.")
+        # Exit the current process to allow NSSM to restart it
+        sys.exit(0)
     except subprocess.CalledProcessError as e:
         logger.error(f"NSSM restart failed with error code {e.returncode}")
-    except subprocess.TimeoutExpired:
-        logger.error("Service restart timed out after 30 seconds")
     except Exception as e:
         logger.error(f"Unexpected error during restart: {e}")
 
