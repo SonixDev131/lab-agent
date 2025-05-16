@@ -39,6 +39,7 @@ UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
 ZIP_PATH = os.path.join(UPDATER_DIR, AGENT_ZIP)
 EXTRACT_DIR = os.path.join(UPDATER_DIR, UPDATE_TEMP)
 CONFIG_KEYS = {"mac_address", "hostname", "room_id", "computer_id"}
+RESTARTING_EVENT = threading.Event()
 
 
 # ===================== CONFIG LOADER =====================
@@ -452,14 +453,11 @@ def clean_up() -> bool:
 
 def restart_nssm_service():
     try:
+        RESTARTING_EVENT.set()  # Mark restart in progress
+
         # Get current signal handlers in main thread first
         original_sigint = signal.getsignal(signal.SIGINT)
         original_sigterm = signal.getsignal(signal.SIGTERM)
-
-        # Ignore signals only if we're in main thread
-        if threading.current_thread() is threading.main_thread():
-            signal.signal(signal.SIGINT, signal.SIG_IGN)
-            signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
         logger.info("Waiting for 5 seconds before restart...")
         time.sleep(5)
@@ -479,6 +477,7 @@ def restart_nssm_service():
     except Exception as e:
         logger.error(f"Unexpected error during restart: {e}")
     finally:
+        RESTARTING_EVENT.clear()  # Cleanup flag
         # Restore signals only in main thread
         if threading.current_thread() is threading.main_thread():
             signal.signal(signal.SIGINT, original_sigint)
@@ -512,6 +511,10 @@ def check_for_updates() -> bool:
 
 # ===================== MAIN LOGIC =====================
 def handle_shutdown_signal(signum=None, frame=None):
+    if RESTARTING_EVENT.is_set():
+        logger.info("Skipping offline status during restart")
+        sys.exit(0)
+
     logger.info("Received shutdown signal, sending offline status...")
     computer_id = get_config_info().get("computer_id")
     room_id = get_config_info().get("room_id")
