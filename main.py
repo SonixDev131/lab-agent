@@ -527,7 +527,7 @@ def main() -> None:
     logger.info("Starting Lab Agent...")
 
     logger.info("Checking for updates...")
-    check_for_updates()
+    # check_for_updates()
 
     computer_id, room_id = register_computer()
     if not computer_id or not room_id:
