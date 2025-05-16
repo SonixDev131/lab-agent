@@ -5,17 +5,17 @@ import os
 import platform
 import re
 import shutil
+import signal
+import subprocess
 import sys
 import threading
 import time
 import zipfile
-from typing import Any, Optional, Tuple
+from typing import Optional, Tuple
 
+import pika
 import psutil
 import requests
-import subprocess
-import signal
-import pika
 
 # ===================== LOGGER =====================
 logger = logging.getLogger("Agent")
@@ -160,13 +160,13 @@ def send_status_update(
         logger.debug(f"Connecting to RabbitMQ at {rabbitmq_url}")
         connection = pika.BlockingConnection(pika.URLParameters(rabbitmq_url))
         logger.debug("RabbitMQ connection established")
-        
+
         channel = connection.channel()
         logger.debug("RabbitMQ channel created")
-        
+
         channel.queue_declare(queue="metrics", durable=True)
         logger.debug("Queue 'metrics' declared")
-        
+
         status_data = {
             "computer_id": computer_id,
             "room_id": room_id,
@@ -174,8 +174,10 @@ def send_status_update(
             "timestamp": int(time.time()),
             "metrics": get_system_metrics(),
         }
-        logger.debug(f"Preparing to send status data: {json.dumps(status_data, indent=2)}")
-        
+        logger.debug(
+            f"Preparing to send status data: {json.dumps(status_data, indent=2)}"
+        )
+
         channel.basic_publish(
             exchange="",
             routing_key="metrics",
@@ -186,13 +188,15 @@ def send_status_update(
             ),
         )
         logger.debug("Message published successfully")
-        
+
         connection.close()
         logger.debug("RabbitMQ connection closed")
         logger.info(f"Status update sent: {status}")
         return True
     except Exception as e:
-        logger.error(f"[send_status_update] Error sending status update: {e}", exc_info=True)
+        logger.error(
+            f"[send_status_update] Error sending status update: {e}", exc_info=True
+        )
         return False
 
 
@@ -227,7 +231,9 @@ def process_command(message: dict) -> bool:
         logger.info(f"Processing command: {type}")
 
         if type == "UPDATE":
-            logger.info("Received update command. Initiating update process in a new thread...")
+            logger.info(
+                "Received update command. Initiating update process in a new thread..."
+            )
             threading.Thread(target=check_for_updates, daemon=True).start()
             return True
 
@@ -272,35 +278,35 @@ def start_command_listener(
             mac_address = data["mac_address"]
         queue_name = mac_address
         logger.debug(f"Using queue name: {queue_name}")
-        
+
         logger.debug("Establishing RabbitMQ connection for command listener")
         connection = pika.BlockingConnection(pika.URLParameters(rabbitmq_url))
         channel = connection.channel()
         logger.debug("RabbitMQ channel created for command listener")
-        
+
         channel.queue_declare(queue=queue_name, durable=True)
         logger.debug(f"Queue declared: {queue_name}")
-        
+
         channel.exchange_declare(
             exchange="cmd.direct", exchange_type="direct", durable=True
         )
         logger.debug("Direct exchange declared: cmd.direct")
-        
+
         channel.queue_bind(
             exchange="cmd.direct",
             queue=queue_name,
             routing_key=f"room.{room_id}",
         )
         logger.debug(f"Queue bound to direct exchange with routing key: room.{room_id}")
-        
+
         channel.exchange_declare(
             exchange="broadcast.fanout", exchange_type="fanout", durable=True
         )
         logger.debug("Fanout exchange declared: broadcast.fanout")
-        
+
         channel.queue_bind(exchange="broadcast.fanout", queue=queue_name)
-        logger.debug(f"Queue bound to fanout exchange")
-        
+        logger.debug("Queue bound to fanout exchange")
+
         channel.basic_consume(
             queue=queue_name,
             on_message_callback=lambda ch, method, properties, body: command_callback(
@@ -309,17 +315,19 @@ def start_command_listener(
             auto_ack=False,
         )
         logger.debug(f"Basic consume set up for queue: {queue_name}")
-        
+
         logger.info(
             f"Listening for commands for MAC={mac_address}, room={room_id}, computer_id={computer_id}"
         )
         while running_flag[0]:
             connection.process_data_events(time_limit=1.0)
-            
+
         logger.debug("Command listener loop ended, closing connection")
         connection.close()
     except Exception as e:
-        logger.error(f"[start_command_listener] Error in command listener: {e}", exc_info=True)
+        logger.error(
+            f"[start_command_listener] Error in command listener: {e}", exc_info=True
+        )
 
 
 # ===================== FILE HELPERS =====================
@@ -334,6 +342,7 @@ def safe_remove(path: str) -> None:
     except Exception as e:
         logger.warning(f"[safe_remove] Failed to remove {path}: {e}")
 
+
 # ===================== EXTRACTOR LOGIC =====================
 def extract_update() -> str:
     try:
@@ -347,7 +356,9 @@ def extract_update() -> str:
         logger.error(f"[extract_update] Error extracting update package: {e}")
         raise
 
+
 # ===================== UPDATER =====================
+
 
 def get_file_hash(file_path: str) -> str:
     sha256_hash = hashlib.sha256()
@@ -355,6 +366,7 @@ def get_file_hash(file_path: str) -> str:
         for byte_block in iter(lambda: f.read(4096), b""):
             sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()
+
 
 def create_file_hash_table() -> dict:
     logger.info("Creating hash table for main.py and requirements.txt...")
@@ -383,9 +395,8 @@ def create_file_hash_table() -> dict:
     finally:
         os.chdir(original_dir)
 
-def send_hash_table_to_server(
-    file_hashes: dict
-) -> Optional[str]:
+
+def send_hash_table_to_server(file_hashes: dict) -> Optional[str]:
     try:
         response = requests.post(
             f"{APP_URL}{UPDATE_ENDPOINT}",
@@ -409,7 +420,8 @@ def send_hash_table_to_server(
             f"[send_hash_table_to_server] Error downloading delta package: {e}"
         )
         return None
-    
+
+
 def install_update() -> bool:
     try:
         for root, dirs, files in os.walk(EXTRACT_DIR):
@@ -426,6 +438,7 @@ def install_update() -> bool:
         logger.error(f"[install_update] Error installing update: {e}")
         raise
 
+
 def clean_up() -> bool:
     try:
         safe_remove(AGENT_ZIP)
@@ -436,12 +449,21 @@ def clean_up() -> bool:
         logger.error(f"[clean_up] Error during cleanup: {e}")
         return False
 
+
 def restart_nssm_service():
     try:
-        subprocess.run(["nssm", "restart", SERVICE_NAME], check=True)
+        logger.info("Preparing to restart service...")
+        time.sleep(3)  # Đảm bảo các kết nối đóng hoàn toàn
+
+        subprocess.run(
+            ["nssm", "restart", SERVICE_NAME],
+            check=True,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
         logger.info(f"Service '{SERVICE_NAME}' restarted successfully.")
     except Exception as e:
         logger.error(f"Failed to restart service '{SERVICE_NAME}': {e}")
+
 
 def check_for_updates() -> bool:
     try:
@@ -459,14 +481,13 @@ def check_for_updates() -> bool:
 
         # Cleanup and restart
         clean_up()
-        restart_nssm_service()
+        threading.Thread(target=restart_nssm_service, daemon=True).start()
         logger.info("Update process completed.")
         return True
 
     except Exception as e:
         logger.error(f"[check_for_updates] Update process failed: {e}")
         return False
-
 
 
 # ===================== MAIN LOGIC =====================
@@ -514,11 +535,11 @@ def main() -> None:
         # Send offline status before exiting
         send_status_update(computer_id, room_id, RABBITMQ_URL, status="offline")
 
-     # Đăng ký signal handlers cho Windows Service
+    # Đăng ký signal handlers cho Windows Service
     signal.signal(signal.SIGINT, handle_shutdown_signal)
     signal.signal(signal.SIGTERM, handle_shutdown_signal)
     signal.signal(signal.SIGBREAK, handle_shutdown_signal)  # Thêm dòng này cho NSSM
-    
+
     try:
         while True:
             time.sleep(1)
