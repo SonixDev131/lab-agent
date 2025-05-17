@@ -499,7 +499,9 @@ def download_update(version: str) -> str:
 def check_updates():
     # Simple version check
     local_version = open(VERSION_FILE).read().strip()
-    server_version = requests.get(f"{APP_URL}{VERSION_ENDPOINT}").text
+    response = requests.get(f"{APP_URL}{VERSION_ENDPOINT}")
+    response.raise_for_status()  # Raise exception for bad status codes
+    server_version = response.json()["latest_version"]
 
     if server_version != local_version:
         # Download update
@@ -523,7 +525,8 @@ def handle_shutdown_signal():
 
 
 def main() -> None:
-    print("Starting Lab Agent...")
+    print("Starting Lab Agent 1...")
+    print("Starting Lab Agent 2...")
     logger.info("Starting Lab Agent...")
 
     logger.info("Checking for updates...")

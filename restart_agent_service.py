@@ -49,7 +49,11 @@ def main():
 
             # Rewrite the version file
             with open(VERSION_FILE, "w") as f:
-                f.write(requests.get(f"{APP_URL}{VERSION_ENDPOINT}").text)
+                f.write(
+                    requests.get(f"{APP_URL}{VERSION_ENDPOINT}").json()[
+                        "latest_version"
+                    ]
+                )
 
             # Start the agent service using nssm
             subprocess.run(["nssm", "start", SERVICE_NAME], check=True)
