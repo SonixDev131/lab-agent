@@ -5,7 +5,6 @@ import os
 import platform
 import re
 import shutil
-import subprocess
 import sys
 import threading
 import time
@@ -30,8 +29,10 @@ UPDATE_TEMP = "update_temp"
 CONFIG_FILE = "agent_config.json"
 HASH_FILE = "file_hashes.json"
 APP_URL = "http://host.docker.internal"
+VERSION_FILE = "version.txt"
 REGISTER_ENDPOINT = "/api/agent/register"
 UPDATE_ENDPOINT = "/api/agent/update"
+VERSION_ENDPOINT = "/api/agent/version"
 RABBITMQ_URL = "amqp://guest:guest@host.docker.internal:5672/"
 SERVICE_NAME = "agent"  # or your actual service name
 UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -449,23 +450,6 @@ def clean_up() -> bool:
         return False
 
 
-def restart_nssm_service():
-    try:
-        logger.info(f"Restarting service {SERVICE_NAME}")
-        subprocess.run(
-            ["nssm", "restart", SERVICE_NAME],
-            check=True,
-            capture_output=True,
-        )
-        logging.info(f"Service {SERVICE_NAME} restarted successfully.")
-        # Exit the current process to allow NSSM to restart it
-        sys.exit(0)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"NSSM restart failed with error code {e.returncode}")
-    except Exception as e:
-        logger.error(f"Unexpected error during restart: {e}")
-
-
 def check_for_updates() -> bool:
     try:
         # Create hash table and send to server
@@ -481,20 +465,52 @@ def check_for_updates() -> bool:
             extract_update()
             logger.info(f"Update extracted to {EXTRACT_DIR}.")
             install_update()
-            # Optionally, create a flag file to signal the need for restart
+            clean_up()
+            # Create a flag file to signal the need for restart
             with open("restart.flag", "w") as f:
                 f.write("restart needed")
             sys.exit(0)
 
-        # Cleanup and restart
-        clean_up()
-        restart_nssm_service()
-        logger.info("Update process completed.")
-        return True
-
     except Exception as e:
         logger.error(f"[check_for_updates] Update process failed: {e}")
         return False
+
+
+def download_update(version: str) -> str:
+    try:
+        response = requests.get(f"{APP_URL}{UPDATE_ENDPOINT}/{version}", stream=True)
+        if response.status_code == 200:
+            with open(AGENT_ZIP, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            logger.info(f"Update package zip file saved to {AGENT_ZIP}")
+            return AGENT_ZIP
+        else:
+            logger.error(
+                f"[download_update] Failed to download update: {response.status_code} - {response.text}"
+            )
+            return None
+    except Exception as e:
+        logger.error(f"[download_update] Error downloading update: {e}")
+        return None
+
+
+def check_updates():
+    # Simple version check
+    local_version = open(VERSION_FILE).read().strip()
+    server_version = requests.get(f"{APP_URL}{VERSION_ENDPOINT}").text
+
+    if server_version != local_version:
+        # Download update
+        update_zip = download_update(server_version)
+
+        # Create flag for restarter
+        with open("restart.flag", "w") as f:
+            f.write(server_version)
+
+        # Exit for restart
+        sys.exit(0)
 
 
 # ===================== MAIN LOGIC =====================
@@ -511,7 +527,8 @@ def main() -> None:
     logger.info("Starting Lab Agent...")
 
     logger.info("Checking for updates...")
-    check_for_updates()
+    # check_for_updates()
+    check_updates()
 
     computer_id, room_id = register_computer()
     if not computer_id or not room_id:
