@@ -38,6 +38,7 @@ SERVICE_NAME = "agent"  # or your actual service name
 UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
 ZIP_PATH = os.path.join(UPDATER_DIR, AGENT_ZIP)
 EXTRACT_DIR = os.path.join(UPDATER_DIR, UPDATE_TEMP)
+VERSION_FILE_PATH = os.path.join(UPDATER_DIR, VERSION_FILE)
 CONFIG_KEYS = {"mac_address", "hostname", "room_id", "computer_id"}
 
 
@@ -498,7 +499,7 @@ def download_update(version: str) -> str:
 
 def check_updates():
     # Simple version check
-    local_version = open(VERSION_FILE).read().strip()
+    local_version = open(VERSION_FILE_PATH).read().strip()
     response = requests.get(f"{APP_URL}{VERSION_ENDPOINT}")
     response.raise_for_status()  # Raise exception for bad status codes
     server_version = response.json()["latest_version"]

@@ -10,6 +10,8 @@ FLAG_FILE = "restart.flag"
 CHECK_INTERVAL = 10  # seconds
 APP_URL = "http://host.docker.internal"
 VERSION_FILE = "version.txt"
+UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
+VERSION_FILE_PATH = os.path.join(UPDATER_DIR, VERSION_FILE)
 VERSION_ENDPOINT = "/api/agent/version"
 
 
@@ -48,7 +50,7 @@ def main():
                 os.remove(FLAG_FILE)
 
             # Rewrite the version file
-            with open(VERSION_FILE, "w") as f:
+            with open(VERSION_FILE_PATH, "w") as f:
                 f.write(
                     requests.get(f"{APP_URL}{VERSION_ENDPOINT}").json()[
                         "latest_version"
