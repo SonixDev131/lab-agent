@@ -5,6 +5,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -30,9 +31,10 @@ CONFIG_FILE = "agent_config.json"
 HASH_FILE = "file_hashes.json"
 APP_URL = "http://host.docker.internal"
 VERSION_FILE = "version.txt"
-REGISTER_ENDPOINT = "/api/agent/register"
+REGISTER_ENDPOINT = "/api/agents/register"
 UPDATE_ENDPOINT = "/api/agent/update"
 VERSION_ENDPOINT = "/api/agent/version"
+COMMAND_RESULT_ENDPOINT = "/api/agent/command-result"
 RABBITMQ_URL = "amqp://guest:guest@host.docker.internal:5672/"
 SERVICE_NAME = "agent"  # or your actual service name
 UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -148,6 +150,7 @@ def get_system_metrics() -> dict:
             "platform": platform.system(),
             "platform_version": platform.version(),
             "hostname": platform.node(),
+            "firewall_status": get_firewall_status(),
         }
     except Exception as e:
         logger.error(f"[get_system_metrics] Error collecting system metrics: {e}")
@@ -201,6 +204,23 @@ def send_status_update(
         return False
 
 
+def get_firewall_status() -> dict:
+    try:
+        cmd = "netsh advfirewall show allprofiles state"
+        result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+        output = result.stdout
+        status = {}
+        for profile in ["Domain", "Private", "Public"]:
+            match = re.search(
+                rf"{profile} Profile Settings:[\s\S]*?State\s+(\w+)", output
+            )
+            if match:
+                status[profile] = match.group(1)
+        return status
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def metrics_heartbeat(
     computer_id: str, room_id: str, rabbitmq_url: str, interval: int, running_flag: list
 ) -> None:
@@ -226,23 +246,136 @@ def start_metrics_thread(
 
 
 # ===================== COMMAND LISTENER =====================
+def open_firewall() -> tuple[bool, Optional[str]]:
+    try:
+        cmd = "netsh advfirewall set allprofiles state on"
+        result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+        output = result.stdout
+        logger.info(f"Firewall status: {output}")
+
+        if result.returncode != 0:
+            error_message = result.stderr or result.stdout or "Unknown error occurred"
+            return False, error_message
+
+        return True, None
+    except Exception as e:
+        error_msg = f"[open_firewall] Error opening firewall: {e}"
+        logger.error(error_msg)
+        return False, error_msg
+
+
+def close_firewall() -> tuple[bool, Optional[str]]:
+    try:
+        cmd = "netsh advfirewall set allprofiles state off"
+        result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+        output = result.stdout
+        logger.info(f"Firewall status: {output}")
+
+        if result.returncode != 0:
+            error_message = result.stderr or result.stdout or "Unknown error occurred"
+            return False, error_message
+
+        return True, None
+    except Exception as e:
+        error_msg = f"[close_firewall] Error closing firewall: {e}"
+        logger.error(error_msg)
+        return False, error_msg
+
+
+def send_command_result(command_id: str, error: Optional[str] = None) -> bool:
+    """
+    Send command execution result to server via HTTP POST request
+
+    Args:
+        command_id: The ID of the command that was executed
+        error: Optional error message if command execution failed
+
+    Returns:
+        bool: True if the request was successful, False otherwise
+    """
+    try:
+        # Skip if no command_id provided
+        if not command_id:
+            return True
+
+        # ISO 8601 format with Z suffix (UTC timezone) similar to Laravel
+        completed_at = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+
+        result_data = {"command_id": command_id, "completed_at": completed_at}
+
+        # Add error if exists
+        if error:
+            result_data["error"] = error
+
+        logger.info(f"Sending command result: {json.dumps(result_data)}")
+
+        response = requests.post(
+            f"{APP_URL}{COMMAND_RESULT_ENDPOINT}", json=result_data
+        )
+
+        if response.status_code == 200:
+            logger.info(f"Command result for {command_id} sent successfully")
+            return True
+        else:
+            logger.error(
+                f"Failed to send command result: {response.status_code} - {response.text}"
+            )
+            return False
+
+    except Exception as e:
+        logger.error(f"[send_command_result] Error sending command result: {e}")
+        return False
+
+
 def process_command(message: dict) -> bool:
     try:
         type = message.get("type", "")
+        command_id = message.get("command_id", "")
         logger.info(f"Processing command: {type}")
+        logger.debug(
+            f"Raw command type: '{type}', length: {len(type)}, repr: {repr(type)}"
+        )
 
-        if type == "UPDATE":
-            logger.info(
-                "Received update command. Initiating update process in a new thread..."
-            )
-            threading.Thread(target=check_for_updates, daemon=True).start()
-            return True
+        success = True
+        error = None
 
-        # Implement other command handling here
+        try:
+            # Normalize command type for case insensitive comparison
+            type_upper = type.strip().upper()
+            logger.debug(f"Normalized command type: '{type_upper}'")
 
-        return True
+            if type_upper == "UPDATE":
+                logger.info(
+                    "Received update command. Initiating update process in a new thread..."
+                )
+                check_updates()
+            elif type_upper == "FIREWALL_ON":
+                logger.info("Received open firewall command. Opening firewall...")
+                success, error_msg = open_firewall()
+                if not success:
+                    error = error_msg
+            elif type_upper == "FIREWALL_OFF":
+                logger.info("Received close firewall command. Closing firewall...")
+                success, error_msg = close_firewall()
+                if not success:
+                    error = error_msg
+            else:
+                # Unknown command type
+                success = False
+                error = f"Unknown command type: {type}"
+        except Exception as e:
+            success = False
+            error = str(e)
+
+        # Send command result
+        send_command_result(command_id, error if not success else None)
+
+        return success
     except Exception as e:
-        logger.error(f"[process_command] Error processing command: {e}")
+        error_msg = f"[process_command] Error processing command: {e}"
+        logger.error(error_msg)
+        if command_id:
+            send_command_result(command_id, error_msg)
         return False
 
 
@@ -258,8 +391,19 @@ def command_callback(
             source = "BROADCAST"
         elif method.exchange == "":
             source = "DIRECT (MAC)"
+
+        # Log detailed message format for debugging
+        logger.debug(f"Raw message: {repr(body.decode('utf-8'))}")
         logger.info(f"Received message from {source}: {json.dumps(message, indent=2)}")
-        process_command(message)
+
+        # Get and validate 'type' field
+        msg_type = message.get("type", "")
+        logger.debug(
+            f"Message type: '{msg_type}', type: {type(msg_type)}, repr: {repr(msg_type)}"
+        )
+
+        process_result = process_command(message)
+        logger.debug(f"Command processing result: {process_result}")
     except json.JSONDecodeError:
         logger.error(f"[command_callback] Cannot decode JSON: {body.decode('utf-8')}")
     except Exception as e:
@@ -526,13 +670,11 @@ def handle_shutdown_signal():
 
 
 def main() -> None:
-    print("Starting Lab Agent 1...")
-    print("Starting Lab Agent 2...")
     logger.info("Starting Lab Agent...")
 
     logger.info("Checking for updates...")
     # check_for_updates()
-    check_updates()
+    # check_updates()
 
     computer_id, room_id = register_computer()
     if not computer_id or not room_id:
