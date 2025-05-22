@@ -74,20 +74,11 @@ def set_value(key: str, value: str) -> None:
 # ===================== REGISTRATION =====================
 def get_mac_address() -> Optional[str]:
     try:
-        stats = psutil.net_if_stats()
         addrs = psutil.net_if_addrs()
         for interface in addrs:
-            if any(
-                k in interface.lower()
-                for k in ["loopback", "virtual", "vmnet", "veth", "docker"]
-            ):
-                continue
-            if interface in stats and stats[interface].isup:
-                for addr in addrs[interface]:
-                    if addr.family == psutil.AF_LINK:
-                        mac = addr.address
-                        if re.match(r"^([0-9A-Fa-f]{2}-){5}([0-9A-Fa-f]{2})$", mac):
-                            return mac
+            # Check if the interface has a valid MAC address
+            if psutil.net_if_addrs()[interface][0].address:
+                return psutil.net_if_addrs()[interface][0].address
         return None
     except Exception as e:
         logger.error(f"[get_mac_address] MAC address error: {e}")
