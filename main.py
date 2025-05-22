@@ -4,7 +4,6 @@ import logging
 import os
 import platform
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -28,7 +27,6 @@ logging.basicConfig(
 AGENT_ZIP = "agent_new.zip"
 UPDATE_TEMP = "update_temp"
 CONFIG_FILE = "agent_config.json"
-HASH_FILE = "file_hashes.json"
 APP_URL = "http://host.docker.internal"
 VERSION_FILE = "version.txt"
 REGISTER_ENDPOINT = "/api/agents/register"
@@ -476,16 +474,6 @@ def start_command_listener(
 
 
 # ===================== FILE HELPERS =====================
-def safe_remove(path: str) -> None:
-    try:
-        if os.path.isfile(path):
-            os.remove(path)
-            logger.info(f"Removed file: {path}")
-        elif os.path.isdir(path):
-            shutil.rmtree(path, ignore_errors=True)
-            logger.info(f"Removed directory: {path}")
-    except Exception as e:
-        logger.warning(f"[safe_remove] Failed to remove {path}: {e}")
 
 
 # ===================== EXTRACTOR LOGIC =====================
@@ -511,114 +499,6 @@ def get_file_hash(file_path: str) -> str:
         for byte_block in iter(lambda: f.read(4096), b""):
             sha256_hash.update(byte_block)
     return sha256_hash.hexdigest()
-
-
-def create_file_hash_table() -> dict:
-    logger.info("Creating hash table for main.py and requirements.txt...")
-    original_dir = os.getcwd()
-    try:
-        os.chdir(UPDATER_DIR)
-        file_hashes = {}
-        target_files = ["main.py", "requirements.txt", "README.md"]
-        for file in target_files:
-            file_path = file
-            if os.path.isfile(file_path):
-                try:
-                    file_hash = get_file_hash(file_path)
-                    file_hashes[file] = file_hash
-                except Exception as e:
-                    logger.error(
-                        f"[create_file_hash_table] Error hashing file {file_path}: {e}"
-                    )
-        hash_file_path = os.path.join(UPDATER_DIR, HASH_FILE)
-        with open(hash_file_path, "w") as f:
-            json.dump(file_hashes, f, indent=2)
-        logger.info(
-            f"Created hashes for {len(file_hashes)} files and saved to {hash_file_path}"
-        )
-        return file_hashes
-    finally:
-        os.chdir(original_dir)
-
-
-def send_hash_table_to_server(file_hashes: dict) -> Optional[str]:
-    try:
-        response = requests.post(
-            f"{APP_URL}{UPDATE_ENDPOINT}",
-            json={"hash_table": file_hashes},
-            stream=True,
-        )
-        if response.status_code == 200:
-            with open(ZIP_PATH, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-            logger.info(f"Delta package zip file saved to {ZIP_PATH}")
-            return ZIP_PATH
-        else:
-            logger.error(
-                f"[send_hash_table_to_server] Failed to download delta package: {response.status_code} - {response.text}"
-            )
-            return None
-    except Exception as e:
-        logger.error(
-            f"[send_hash_table_to_server] Error downloading delta package: {e}"
-        )
-        return None
-
-
-def install_update() -> bool:
-    try:
-        for root, dirs, files in os.walk(EXTRACT_DIR):
-            for file in files:
-                src = os.path.join(root, file)
-                rel_path = os.path.relpath(src, EXTRACT_DIR)
-                dst = os.path.join(os.getcwd(), rel_path)
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                os.replace(src, dst)
-                logger.info(f"Installed: {rel_path}")
-        logger.info("Update installation completed")
-        return True
-    except Exception as e:
-        logger.error(f"[install_update] Error installing update: {e}")
-        raise
-
-
-def clean_up() -> bool:
-    try:
-        safe_remove(AGENT_ZIP)
-        safe_remove(EXTRACT_DIR)
-        logger.info("Temporary files cleaned up")
-        return True
-    except Exception as e:
-        logger.error(f"[clean_up] Error during cleanup: {e}")
-        return False
-
-
-def check_for_updates() -> bool:
-    try:
-        # Create hash table and send to server
-        file_hashes = create_file_hash_table()
-        zip_file = send_hash_table_to_server(file_hashes)
-        update_needed = zip_file is not None
-        if not update_needed:
-            logger.info("No delta package received from Update Server.")
-            return False
-        else:
-            logger.info("Update needed. Exiting for external restart.")
-            # Extract and install update
-            extract_update()
-            logger.info(f"Update extracted to {EXTRACT_DIR}.")
-            install_update()
-            clean_up()
-            # Create a flag file to signal the need for restart
-            with open("restart.flag", "w") as f:
-                f.write("restart needed")
-            sys.exit(0)
-
-    except Exception as e:
-        logger.error(f"[check_for_updates] Update process failed: {e}")
-        return False
 
 
 def download_update(version: str) -> str:
@@ -673,8 +553,7 @@ def main() -> None:
     logger.info("Starting Lab Agent...")
 
     logger.info("Checking for updates...")
-    # check_for_updates()
-    # check_updates()
+    check_updates()
 
     computer_id, room_id = register_computer()
     if not computer_id or not room_id:
