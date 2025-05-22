@@ -45,9 +45,7 @@ def main():
                     if os.path.isfile(src):
                         shutil.move(src, dst)  # Move and overwrite files
 
-            # Delete the restart.flag file
-            if os.path.exists(FLAG_FILE):
-                os.remove(FLAG_FILE)
+            os.remove(FLAG_FILE)
 
             # Rewrite the version file
             with open(VERSION_FILE_PATH, "w") as f:

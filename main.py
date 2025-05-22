@@ -532,14 +532,6 @@ def check_updates():
 
 
 # ===================== MAIN LOGIC =====================
-def handle_shutdown_signal():
-    logger.info("Received shutdown signal, sending offline status...")
-    computer_id = get_config_info().get("computer_id")
-    room_id = get_config_info().get("room_id")
-    send_status_update(computer_id, room_id, RABBITMQ_URL, status="offline")
-    sys.exit(0)
-
-
 def main() -> None:
     logger.info("Starting Lab Agent...")
 
@@ -564,15 +556,8 @@ def main() -> None:
     command_thread.start()
     logger.info("All modules have been started.")
 
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Shutting down agent...")
-        metrics_running[0] = False
-        command_running[0] = False
-        # Send offline status before exiting
-        handle_shutdown_signal()
+    while True:
+        time.sleep(1)
 
 
 if __name__ == "__main__":
