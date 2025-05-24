@@ -576,43 +576,101 @@ def start_command_listener(
 # ===================== UPDATER =====================
 
 
-def download_update(version: str) -> str:
+def download_update(version: str) -> bool:
     try:
-        response = requests.get(f"{APP_URL}{UPDATE_ENDPOINT}/{version}", stream=True)
+        # Check available disk space (at least 100MB free)
+        disk_usage = psutil.disk_usage(".")
+        free_space_mb = disk_usage.free / (1024 * 1024)
+        if free_space_mb < 100:
+            logger.error(
+                f"Insufficient disk space: {free_space_mb:.1f}MB free, need at least 100MB"
+            )
+            return None
+
+        logger.info(f"Downloading update version {version}...")
+        response = requests.get(
+            f"{APP_URL}{UPDATE_ENDPOINT}/{version}",
+            stream=True,
+            timeout=300,  # 5 minute timeout
+        )
         if response.status_code == 200:
+            total_size = int(response.headers.get("content-length", 0))
+            downloaded = 0
+
             with open(AGENT_ZIP, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
-            logger.info(f"Update package zip file saved to {AGENT_ZIP}")
-            return AGENT_ZIP
+                        downloaded += len(chunk)
+                        # Log progress every 1MB
+                        if downloaded % (1024 * 1024) == 0:
+                            if total_size > 0:
+                                progress = (downloaded / total_size) * 100
+                                logger.info(f"Download progress: {progress:.1f}%")
+
+            logger.info(
+                f"Update package zip file saved to {AGENT_ZIP} ({downloaded} bytes)"
+            )
+            return True
         else:
             logger.error(
                 f"[download_update] Failed to download update: {response.status_code} - {response.text}"
             )
-            return None
+            return False
+    except requests.exceptions.Timeout:
+        logger.error("[download_update] Download timeout after 5 minutes")
+        return False
+    except requests.exceptions.RequestException as e:
+        logger.error(f"[download_update] Network error during download: {e}")
+        return False
     except Exception as e:
         logger.error(f"[download_update] Error downloading update: {e}")
-        return None
+        return False
 
 
 def check_updates():
-    # Simple version check
-    local_version = open(VERSION_FILE_PATH).read().strip()
-    response = requests.get(f"{APP_URL}{VERSION_ENDPOINT}")
-    response.raise_for_status()  # Raise exception for bad status codes
-    server_version = response.json()["latest_version"]
+    try:
+        # Simple version check
+        local_version = open(VERSION_FILE_PATH).read().strip()
+        response = requests.get(f"{APP_URL}{VERSION_ENDPOINT}")
+        response.raise_for_status()  # Raise exception for bad status codes
+        server_version = response.json()["latest_version"]
 
-    if server_version != local_version:
-        # Download update
-        update_zip = download_update(server_version)
+        if server_version != local_version:
+            logger.info(f"Update available: {local_version} -> {server_version}")
 
-        # Create flag for restarter
-        with open("restart.flag", "w") as f:
-            f.write(server_version)
+            # Download update and check if successful
+            download_result = download_update(server_version)
 
-        # Exit for restart
-        sys.exit(0)
+            if not download_result:
+                logger.error("Failed to download update. Aborting update process.")
+                return
+
+            # Verify the downloaded file exists and is valid
+            if not os.path.exists(AGENT_ZIP):
+                logger.error(f"Downloaded file {AGENT_ZIP} not found. Aborting update.")
+                return
+
+            # Check file size (should be > 0)
+            if os.path.getsize(AGENT_ZIP) == 0:
+                logger.error(f"Downloaded file {AGENT_ZIP} is empty. Aborting update.")
+                os.remove(AGENT_ZIP)  # Remove corrupted file
+                return
+
+            logger.info("Download successful. Creating restart flag...")
+
+            # Create flag for restarter only after successful download
+            with open("restart.flag", "w") as f:
+                f.write(server_version)
+
+            logger.info("Update process initiated. Exiting for restart...")
+            # Exit for restart
+            sys.exit(0)
+        else:
+            logger.info(f"Already on latest version: {local_version}")
+    except Exception as e:
+        logger.error(f"[check_updates] Error checking for updates: {e}")
+        # Don't exit on error, continue with current version
 
 
 # ===================== MAIN LOGIC =====================
