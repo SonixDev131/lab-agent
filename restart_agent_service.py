@@ -112,9 +112,10 @@ def apply_update_safely():
                 shutil.move(src, dst)
                 logger.info(f"Updated: {item}")
 
-        # Clean up extract directory
-        shutil.rmtree(EXTRACT_DIR)
-        logger.info("Update applied successfully")
+        # Keep extract directory for debugging/backup purposes
+        logger.info(
+            f"Update applied successfully. Extract directory preserved at: {EXTRACT_DIR}"
+        )
         return True
     except Exception as e:
         logger.error(f"Failed to apply update: {e}")

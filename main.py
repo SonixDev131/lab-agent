@@ -684,6 +684,7 @@ def check_updates():
 
 # ===================== MAIN LOGIC =====================
 def main() -> None:
+    print("Starting Lab Agent...")
     logger.info("Starting Lab Agent...")
 
     logger.info("Checking for updates...")
