@@ -19,10 +19,8 @@ pip install -r "$env:USERPROFILE\lab-agent\requirements.txt"
 # Start service
 nssm install "agent" python "$env:USERPROFILE\lab-agent\main.py"
 nssm install "restart_agent_service" python "$env:USERPROFILE\lab-agent\restart_agent_service.py"
-nssm set "agent" AppStdout "$env:USERPROFILE\lab-agent\service-output.txt"
 nssm set "agent" AppStderr "$env:USERPROFILE\lab-agent\service-error.txt"
-nssm set "restart_agent_service" AppStdout "$env:USERPROFILE\lab-agent\service-output.txt"
-nssm set "restart_agent_service" AppStderr "$env:USERPROFILE\lab-agent\service-error.txt"
+nssm set "restart_agent_service" AppStderr "$env:USERPROFILE\lab-agent\restart-service-error.txt"
 nssm start agent
 nssm start restart_agent_service
 
