@@ -1,4 +1,3 @@
-import hashlib
 import json
 import logging
 import os
@@ -8,7 +7,6 @@ import subprocess
 import sys
 import threading
 import time
-import zipfile
 from typing import Optional, Tuple
 
 import pika
@@ -52,23 +50,6 @@ def get_config_info() -> dict:
     except Exception as e:
         logger.error(f"[get_config_info] Config read error: {e}")
         return {k: None for k in CONFIG_KEYS}
-
-
-def set_value(key: str, value: str) -> None:
-    try:
-        data = {}
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, "r") as f:
-                try:
-                    data = json.load(f)
-                except json.JSONDecodeError:
-                    pass
-        data[key] = value
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(data, f, indent=4)
-        logger.info(f"[set_value] Updated config: set {key} = {value}")
-    except Exception as e:
-        logger.error(f"[set_value] Failed to update config: {e}")
 
 
 # ===================== REGISTRATION =====================
@@ -235,7 +216,7 @@ def start_metrics_thread(
 
 
 # ===================== COMMAND LISTENER =====================
-def open_firewall() -> tuple[bool, Optional[str]]:
+def open_firewall() -> tuple[bool, str]:
     try:
         cmd = "netsh advfirewall set allprofiles state on"
         result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
@@ -246,14 +227,14 @@ def open_firewall() -> tuple[bool, Optional[str]]:
             error_message = result.stderr or result.stdout or "Unknown error occurred"
             return False, error_message
 
-        return True, None
+        return True, output
     except Exception as e:
         error_msg = f"[open_firewall] Error opening firewall: {e}"
         logger.error(error_msg)
-        return False, error_msg
+        return False, output
 
 
-def close_firewall() -> tuple[bool, Optional[str]]:
+def close_firewall() -> tuple[bool, str]:
     try:
         cmd = "netsh advfirewall set allprofiles state off"
         result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
@@ -264,20 +245,92 @@ def close_firewall() -> tuple[bool, Optional[str]]:
             error_message = result.stderr or result.stdout or "Unknown error occurred"
             return False, error_message
 
-        return True, None
+        return True, output
     except Exception as e:
         error_msg = f"[close_firewall] Error closing firewall: {e}"
         logger.error(error_msg)
         return False, error_msg
 
 
-def send_command_result(command_id: str, error: Optional[str] = None) -> bool:
+def remove_website_block(websites_to_unblock: list) -> tuple[bool, str]:
+    try:
+        with open(r"C:\Windows\System32\drivers\etc\hosts", "r+") as file:
+            lines = file.readlines()
+            file.seek(0)
+            removed_sites = []
+            for line in lines:
+                line_written = False
+                for website in websites_to_unblock:
+                    if f"127.0.0.1 {website}" in line:
+                        removed_sites.append(website)
+                        line_written = True
+                        break
+                if not line_written:
+                    file.write(line)
+            file.truncate()
+
+            if removed_sites:
+                return (
+                    True,
+                    f"Successfully unblocked websites: {', '.join(removed_sites)}",
+                )
+            else:
+                return True, "No websites were found to unblock"
+    except Exception as e:
+        error_msg = f"[remove_website_block] Error unblocking websites: {e}"
+        logger.error(error_msg)
+        return False, error_msg
+
+
+def block_website(websites_to_block: list) -> tuple[bool, str]:
+    try:
+        with open(r"C:\Windows\System32\drivers\etc\hosts", "a+") as file:
+            file.seek(0)
+            content = file.read()
+            blocked_sites = []
+            for website in websites_to_block:
+                if f"127.0.0.1 {website}" not in content:
+                    file.seek(0, 2)  # Move to end of file
+                    file.write(f"127.0.0.1 {website}\n")
+                    blocked_sites.append(website)
+
+            if blocked_sites:
+                return (
+                    True,
+                    f"Successfully blocked websites: {', '.join(blocked_sites)}",
+                )
+            else:
+                return True, "All websites were already blocked"
+    except Exception as e:
+        error_msg = f"[block_website] Error blocking websites: {e}"
+        logger.error(error_msg)
+        return False, error_msg
+
+
+def execute_custom_command(name: str, args: list) -> tuple[bool, Optional[str]]:
+    try:
+        cmd = f"{name} {args}"
+        result = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+        stdout = result.stdout
+
+        if result.returncode != 0:
+            error_message = result.stderr or stdout or "Unknown error occurred"
+            return False, error_message
+        return True, stdout
+    except Exception as e:
+        return False, str(e)
+
+
+def send_command_result(
+    command_id: str, error: Optional[str] = None, output: Optional[str] = None
+) -> bool:
     """
     Send command execution result to server via HTTP POST request
 
     Args:
         command_id: The ID of the command that was executed
         error: Optional error message if command execution failed
+        output: Optional output message if command execution succeeded
 
     Returns:
         bool: True if the request was successful, False otherwise
@@ -287,6 +340,10 @@ def send_command_result(command_id: str, error: Optional[str] = None) -> bool:
         if not command_id:
             return True
 
+        logger.debug(
+            f"send_command_result called with - command_id: {command_id}, error: {error}, output: {output}"
+        )
+
         # ISO 8601 format with Z suffix (UTC timezone) similar to Laravel
         completed_at = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
 
@@ -295,6 +352,12 @@ def send_command_result(command_id: str, error: Optional[str] = None) -> bool:
         # Add error if exists
         if error:
             result_data["error"] = error
+            logger.debug(f"Added error to result_data: {error}")
+
+        # Add output if exists and no error
+        if output is not None and not error:
+            result_data["output"] = output
+            logger.debug(f"Added output to result_data: {output}")
 
         logger.info(f"Sending command result: {json.dumps(result_data)}")
 
@@ -318,15 +381,19 @@ def send_command_result(command_id: str, error: Optional[str] = None) -> bool:
 
 def process_command(message: dict) -> bool:
     try:
+        logger.info(f"Processing command: {message}")
         type = message.get("type", "")
         command_id = message.get("command_id", "")
+        params = message.get("params", {})
         logger.info(f"Processing command: {type}")
         logger.debug(
             f"Raw command type: '{type}', length: {len(type)}, repr: {repr(type)}"
         )
+        logger.info(f"Command params: {params}")
 
         success = True
         error = None
+        output = None
 
         try:
             # Normalize command type for case insensitive comparison
@@ -338,16 +405,46 @@ def process_command(message: dict) -> bool:
                     "Received update command. Initiating update process in a new thread..."
                 )
                 check_updates()
+                output = "Update process initiated"
             elif type_upper == "FIREWALL_ON":
                 logger.info("Received open firewall command. Opening firewall...")
-                success, error_msg = open_firewall()
-                if not success:
-                    error = error_msg
+                success, msg = open_firewall()
+                if success:
+                    output = msg
+                else:
+                    error = msg
             elif type_upper == "FIREWALL_OFF":
                 logger.info("Received close firewall command. Closing firewall...")
-                success, error_msg = close_firewall()
-                if not success:
-                    error = error_msg
+                success, msg = close_firewall()
+                if success:
+                    output = msg
+                else:
+                    error = msg
+            elif type_upper == "BLOCK_WEBSITE":
+                logger.info("Received block website command. Blocking website...")
+                urls = params.get("urls", [])
+                success, msg = block_website(urls)
+                if success:
+                    output = msg
+                else:
+                    error = msg
+            elif type_upper == "UNBLOCK_WEBSITE":
+                logger.info("Received unblock website command. Unblocking website...")
+                urls = params.get("urls", [])
+                success, msg = remove_website_block(urls)
+                if success:
+                    output = msg
+                else:
+                    error = msg
+            elif type_upper == "CUSTOM":
+                logger.info("Received custom command. Executing custom command...")
+                name = params.get("name", "")
+                args = params.get("args", [])
+                success, msg = execute_custom_command(name, args)
+                if success:
+                    output = msg
+                else:
+                    error = msg
             else:
                 # Unknown command type
                 success = False
@@ -356,15 +453,20 @@ def process_command(message: dict) -> bool:
             success = False
             error = str(e)
 
-        # Send command result
-        send_command_result(command_id, error if not success else None)
+        # Send command result with output for success or error for failure
+        logger.debug(
+            f"Command processing complete - success: {success}, error: {error}, output: {output}"
+        )
+        send_command_result(
+            command_id, error if not success else None, output if success else None
+        )
 
         return success
     except Exception as e:
         error_msg = f"[process_command] Error processing command: {e}"
         logger.error(error_msg)
         if command_id:
-            send_command_result(command_id, error_msg)
+            send_command_result(command_id, error_msg, None)
         return False
 
 
@@ -373,6 +475,7 @@ def command_callback(
 ) -> None:
     try:
         message = json.loads(body.decode("utf-8"))
+        print(message)
         source = "default"
         if method.exchange == "cmd.direct":
             source = f"CMD (room.{room_id})"
@@ -468,28 +571,9 @@ def start_command_listener(
 
 
 # ===================== EXTRACTOR LOGIC =====================
-def extract_update() -> str:
-    try:
-        if not os.path.exists(EXTRACT_DIR):
-            os.makedirs(EXTRACT_DIR, exist_ok=True)
-        with zipfile.ZipFile(ZIP_PATH, "r") as zip_ref:
-            zip_ref.extractall(EXTRACT_DIR)
-        logger.info(f"Update package extracted to: {EXTRACT_DIR}")
-        return EXTRACT_DIR
-    except Exception as e:
-        logger.error(f"[extract_update] Error extracting update package: {e}")
-        raise
 
 
 # ===================== UPDATER =====================
-
-
-def get_file_hash(file_path: str) -> str:
-    sha256_hash = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for byte_block in iter(lambda: f.read(4096), b""):
-            sha256_hash.update(byte_block)
-    return sha256_hash.hexdigest()
 
 
 def download_update(version: str) -> str:
@@ -536,7 +620,7 @@ def main() -> None:
     logger.info("Starting Lab Agent...")
 
     logger.info("Checking for updates...")
-    check_updates()
+    # check_updates()
 
     computer_id, room_id = register_computer()
     if not computer_id or not room_id:
