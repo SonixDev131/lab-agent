@@ -75,12 +75,20 @@ def validate_zip_file(zip_path):
 def extract_update_safely():
     """Safely extract update with validation"""
     try:
-        # Remove existing extract directory
+        # Keep update directory, just clean contents if exists
         if os.path.exists(EXTRACT_DIR):
-            shutil.rmtree(EXTRACT_DIR)
-
-        # Create extract directory
-        os.makedirs(EXTRACT_DIR, exist_ok=True)
+            # Remove contents but keep the directory
+            for item in os.listdir(EXTRACT_DIR):
+                item_path = os.path.join(EXTRACT_DIR, item)
+                if os.path.isfile(item_path):
+                    os.remove(item_path)
+                elif os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+            logger.info(f"Cleaned existing update directory: {EXTRACT_DIR}")
+        else:
+            # Create extract directory
+            os.makedirs(EXTRACT_DIR, exist_ok=True)
+            logger.info(f"Created new update directory: {EXTRACT_DIR}")
 
         # Extract the zip file
         with zipfile.ZipFile(ZIP_FILE, "r") as zip_ref:
@@ -94,22 +102,22 @@ def extract_update_safely():
 
 
 def apply_update_safely():
-    """Safely apply update by moving files"""
+    """Safely apply update by copying files"""
     try:
         if not os.path.exists(EXTRACT_DIR):
             logger.error(f"Extract directory {EXTRACT_DIR} not found")
             return False
 
-        # Move all files from update folder to current directory
+        # Copy all files from update folder to current directory
         for item in os.listdir(EXTRACT_DIR):
             src = os.path.join(EXTRACT_DIR, item)
             dst = os.path.join(".", item)
 
             if os.path.isfile(src):
-                # Remove destination if exists, then move
+                # Remove destination if exists, then copy
                 if os.path.exists(dst):
                     os.remove(dst)
-                shutil.move(src, dst)
+                shutil.copy2(src, dst)
                 logger.info(f"Updated: {item}")
 
         # Keep extract directory for debugging/backup purposes
