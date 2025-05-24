@@ -7,7 +7,7 @@ from datetime import datetime
 
 SERVICE_NAME = "agent"
 FLAG_FILE = "restart.flag"
-CHECK_INTERVAL = 10  # seconds
+CHECK_INTERVAL = 3  # seconds - Reduced from 10 to 3 for better responsiveness
 APP_URL = "http://host.docker.internal"
 VERSION_FILE = "version.txt"
 UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -113,6 +113,8 @@ def apply_update_safely():
 
 
 def main():
+    print(f"Restart agent service monitor started (check interval: {CHECK_INTERVAL}s)")
+
     while True:
         if os.path.exists(FLAG_FILE):
             print("Update flag detected. Starting update process...")
