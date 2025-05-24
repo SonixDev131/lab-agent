@@ -585,7 +585,7 @@ def download_update(version: str) -> bool:
             logger.error(
                 f"Insufficient disk space: {free_space_mb:.1f}MB free, need at least 100MB"
             )
-            return None
+            return False
 
         logger.info(f"Downloading update version {version}...")
         response = requests.get(
@@ -631,10 +631,19 @@ def download_update(version: str) -> bool:
 def check_updates():
     try:
         # Simple version check
+        logger.info(f"Reading version from: {VERSION_FILE_PATH}")
+
+        if not os.path.exists(VERSION_FILE_PATH):
+            logger.error(f"Version file {VERSION_FILE_PATH} does not exist!")
+            return
+
         local_version = open(VERSION_FILE_PATH).read().strip()
+        logger.info(f"Local version: '{local_version}'")
+
         response = requests.get(f"{APP_URL}{VERSION_ENDPOINT}")
         response.raise_for_status()  # Raise exception for bad status codes
         server_version = response.json()["latest_version"]
+        logger.info(f"Server version: '{server_version}'")
 
         if server_version != local_version:
             logger.info(f"Update available: {local_version} -> {server_version}")

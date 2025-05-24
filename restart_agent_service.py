@@ -114,6 +114,19 @@ def apply_update_safely():
 
 def main():
     print(f"Restart agent service monitor started (check interval: {CHECK_INTERVAL}s)")
+    print(f"Working directory: {os.getcwd()}")
+    print(f"Version file path: {VERSION_FILE_PATH}")
+
+    # Debug: Check initial version file
+    try:
+        if os.path.exists(VERSION_FILE_PATH):
+            with open(VERSION_FILE_PATH, "r") as f:
+                initial_version = f.read().strip()
+            print(f"Initial version detected: {initial_version}")
+        else:
+            print(f"Warning: Version file {VERSION_FILE_PATH} does not exist")
+    except Exception as e:
+        print(f"Error reading initial version: {e}")
 
     while True:
         if os.path.exists(FLAG_FILE):
@@ -152,11 +165,24 @@ def main():
                 subprocess.run(["nssm", "stop", SERVICE_NAME], check=True)
                 print("Agent service stopped")
 
+                # Wait a moment for service to fully stop
+                time.sleep(2)
+
                 # Extract update safely
                 if not extract_update_safely():
                     print("Failed to extract update. Aborting.")
                     subprocess.run(["nssm", "start", SERVICE_NAME], check=True)
                     continue
+
+                # ⚠️ CRITICAL: Update version file BEFORE applying files
+                # This prevents infinite loop if update package contains version.txt
+                try:
+                    with open(VERSION_FILE_PATH, "w") as f:
+                        f.write(target_version)
+                    print(f"Version updated to: {target_version} (before file apply)")
+                except Exception as e:
+                    print(f"Failed to update version file: {e}")
+                    # Continue anyway, but this is risky
 
                 # Apply update safely
                 if not apply_update_safely():
@@ -170,13 +196,22 @@ def main():
                 # Remove flag file
                 os.remove(FLAG_FILE)
 
-                # Update version file
+                # Double-check version file is correct (in case it was overwritten)
                 try:
-                    with open(VERSION_FILE_PATH, "w") as f:
-                        f.write(target_version)
-                    print(f"Version updated to: {target_version}")
+                    with open(VERSION_FILE_PATH, "r") as f:
+                        current_version = f.read().strip()
+                    if current_version != target_version:
+                        print("Warning: Version file was overwritten. Fixing it...")
+                        with open(VERSION_FILE_PATH, "w") as f:
+                            f.write(target_version)
+                        print(f"Version corrected to: {target_version}")
+                    else:
+                        print(f"Version file confirmed: {target_version}")
                 except Exception as e:
-                    print(f"Failed to update version file: {e}")
+                    print(f"Error checking version file: {e}")
+
+                # Wait before starting service to ensure all file operations complete
+                time.sleep(3)
 
                 # Start the agent service using nssm
                 print("Starting agent service...")
