@@ -8,6 +8,9 @@ choco install -y git --params "/GitOnlyOnPath /NoShellIntegration /WindowsTermin
 choco install -y nssm
 choco install -y python
 RefreshEnv
+if (Test-Path "$env:USERPROFILE\lab-agent") {
+    Remove-Item -Path "$env:USERPROFILE\lab-agent" -Recurse -Force
+}
 git clone https://github.com/SonixDev131/lab-agent.git "$env:USERPROFILE\lab-agent"
 
 # Install python dependencies
