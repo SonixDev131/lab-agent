@@ -15,35 +15,44 @@ logging.basicConfig(
 )
 
 SERVICE_NAME = "agent"
-FLAG_FILE = "restart.flag"
+UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
+FLAG_FILE = os.path.join(UPDATER_DIR, "restart.flag")
 CHECK_INTERVAL = 3  # seconds - Reduced from 10 to 3 for better responsiveness
 APP_URL = "http://host.docker.internal"
 VERSION_FILE = "version.txt"
-UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
 VERSION_FILE_PATH = os.path.join(UPDATER_DIR, VERSION_FILE)
 VERSION_ENDPOINT = "/api/agent/version"
-ZIP_FILE = "agent_new.zip"
-EXTRACT_DIR = "update"
-BACKUP_DIR = "backup"
+ZIP_FILE = os.path.join(UPDATER_DIR, "agent_new.zip")
+EXTRACT_DIR = os.path.join(UPDATER_DIR, "update")
+BACKUP_DIR = os.path.join(UPDATER_DIR, "backup")
 
 
 def create_backup():
     """Create backup of current version before update"""
     try:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"{BACKUP_DIR}/backup_{timestamp}"
+        backup_path = os.path.join(BACKUP_DIR, f"backup_{timestamp}")
 
         if not os.path.exists(BACKUP_DIR):
             os.makedirs(BACKUP_DIR)
 
-        # Backup important files
-        important_files = ["main.py", "version.txt", "agent_config.json"]
+        # Backup important files with absolute paths
+        important_files = {
+            "main.py": os.path.join(UPDATER_DIR, "main.py"),
+            "version.txt": os.path.join(UPDATER_DIR, "version.txt"),
+            "agent_config.json": os.path.join(UPDATER_DIR, "agent_config.json"),
+            "restart_agent_service.py": os.path.join(
+                UPDATER_DIR, "restart_agent_service.py"
+            ),
+        }
 
         os.makedirs(backup_path, exist_ok=True)
 
-        for file in important_files:
-            if os.path.exists(file):
-                shutil.copy2(file, backup_path)
+        for filename, filepath in important_files.items():
+            if os.path.exists(filepath):
+                dst = os.path.join(backup_path, filename)
+                shutil.copy2(filepath, dst)
+                logger.debug(f"Backed up: {filepath} -> {dst}")
 
         logger.info(f"Backup created at: {backup_path}")
         return backup_path
@@ -75,20 +84,12 @@ def validate_zip_file(zip_path):
 def extract_update_safely():
     """Safely extract update with validation"""
     try:
-        # Keep update directory, just clean contents if exists
+        # Remove existing extract directory
         if os.path.exists(EXTRACT_DIR):
-            # Remove contents but keep the directory
-            for item in os.listdir(EXTRACT_DIR):
-                item_path = os.path.join(EXTRACT_DIR, item)
-                if os.path.isfile(item_path):
-                    os.remove(item_path)
-                elif os.path.isdir(item_path):
-                    shutil.rmtree(item_path)
-            logger.info(f"Cleaned existing update directory: {EXTRACT_DIR}")
-        else:
-            # Create extract directory
-            os.makedirs(EXTRACT_DIR, exist_ok=True)
-            logger.info(f"Created new update directory: {EXTRACT_DIR}")
+            shutil.rmtree(EXTRACT_DIR)
+
+        # Create extract directory
+        os.makedirs(EXTRACT_DIR, exist_ok=True)
 
         # Extract the zip file
         with zipfile.ZipFile(ZIP_FILE, "r") as zip_ref:
@@ -102,23 +103,23 @@ def extract_update_safely():
 
 
 def apply_update_safely():
-    """Safely apply update by copying files"""
+    """Safely apply update by moving files"""
     try:
         if not os.path.exists(EXTRACT_DIR):
             logger.error(f"Extract directory {EXTRACT_DIR} not found")
             return False
 
-        # Copy all files from update folder to current directory
+        # Move all files from update folder to UPDATER_DIR (absolute path)
         for item in os.listdir(EXTRACT_DIR):
             src = os.path.join(EXTRACT_DIR, item)
-            dst = os.path.join(".", item)
+            dst = os.path.join(UPDATER_DIR, item)
 
             if os.path.isfile(src):
-                # Remove destination if exists, then copy
+                # Remove destination if exists, then move
                 if os.path.exists(dst):
                     os.remove(dst)
-                shutil.copy2(src, dst)
-                logger.info(f"Updated: {item}")
+                shutil.move(src, dst)
+                logger.info(f"Updated: {item} -> {dst}")
 
         # Keep extract directory for debugging/backup purposes
         logger.info(
@@ -130,11 +131,25 @@ def apply_update_safely():
         return False
 
 
+def ensure_correct_working_directory():
+    """Ensure we're running from the correct directory"""
+    try:
+        # Change to the script's directory
+        os.chdir(UPDATER_DIR)
+        logger.info(f"Working directory changed to: {UPDATER_DIR}")
+    except Exception as e:
+        logger.error(f"Failed to change working directory: {e}")
+
+
 def main():
+    # First, ensure we're in the correct directory
+    ensure_correct_working_directory()
+
     logger.info(
         f"Restart agent service monitor started (check interval: {CHECK_INTERVAL}s)"
     )
     logger.info(f"Working directory: {os.getcwd()}")
+    logger.info(f"Script directory: {UPDATER_DIR}")
     logger.info(f"Version file path: {VERSION_FILE_PATH}")
 
     # Debug: Check initial version file

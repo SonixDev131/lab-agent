@@ -24,7 +24,6 @@ logging.basicConfig(
 # ===================== CONSTANTS =====================
 AGENT_ZIP = "agent_new.zip"
 UPDATE_TEMP = "update_temp"
-CONFIG_FILE = "agent_config.json"
 APP_URL = "http://host.docker.internal"
 VERSION_FILE = "version.txt"
 REGISTER_ENDPOINT = "/api/agents/register"
@@ -34,9 +33,11 @@ COMMAND_RESULT_ENDPOINT = "/api/agent/command-result"
 RABBITMQ_URL = "amqp://guest:guest@host.docker.internal:5672/"
 SERVICE_NAME = "agent"  # or your actual service name
 UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_FILE = os.path.join(UPDATER_DIR, "agent_config.json")
 ZIP_PATH = os.path.join(UPDATER_DIR, AGENT_ZIP)
 EXTRACT_DIR = os.path.join(UPDATER_DIR, UPDATE_TEMP)
 VERSION_FILE_PATH = os.path.join(UPDATER_DIR, VERSION_FILE)
+RESTART_FLAG_PATH = os.path.join(UPDATER_DIR, "restart.flag")
 CONFIG_KEYS = {"mac_address", "hostname", "room_id", "computer_id"}
 
 
@@ -597,7 +598,7 @@ def download_update(version: str) -> bool:
             total_size = int(response.headers.get("content-length", 0))
             downloaded = 0
 
-            with open(AGENT_ZIP, "wb") as f:
+            with open(ZIP_PATH, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
@@ -609,7 +610,7 @@ def download_update(version: str) -> bool:
                                 logger.info(f"Download progress: {progress:.1f}%")
 
             logger.info(
-                f"Update package zip file saved to {AGENT_ZIP} ({downloaded} bytes)"
+                f"Update package zip file saved to {ZIP_PATH} ({downloaded} bytes)"
             )
             return True
         else:
@@ -656,20 +657,20 @@ def check_updates():
                 return
 
             # Verify the downloaded file exists and is valid
-            if not os.path.exists(AGENT_ZIP):
-                logger.error(f"Downloaded file {AGENT_ZIP} not found. Aborting update.")
+            if not os.path.exists(ZIP_PATH):
+                logger.error(f"Downloaded file {ZIP_PATH} not found. Aborting update.")
                 return
 
             # Check file size (should be > 0)
-            if os.path.getsize(AGENT_ZIP) == 0:
-                logger.error(f"Downloaded file {AGENT_ZIP} is empty. Aborting update.")
-                os.remove(AGENT_ZIP)  # Remove corrupted file
+            if os.path.getsize(ZIP_PATH) == 0:
+                logger.error(f"Downloaded file {ZIP_PATH} is empty. Aborting update.")
+                os.remove(ZIP_PATH)  # Remove corrupted file
                 return
 
             logger.info("Download successful. Creating restart flag...")
 
             # Create flag for restarter only after successful download
-            with open("restart.flag", "w") as f:
+            with open(RESTART_FLAG_PATH, "w") as f:
                 f.write(server_version)
 
             logger.info("Update process initiated. Exiting for restart...")
@@ -683,9 +684,24 @@ def check_updates():
 
 
 # ===================== MAIN LOGIC =====================
+def ensure_correct_working_directory():
+    """Ensure we're running from the correct directory"""
+    try:
+        # Change to the script's directory
+        os.chdir(UPDATER_DIR)
+        logger.info(f"Working directory changed to: {UPDATER_DIR}")
+    except Exception as e:
+        logger.error(f"Failed to change working directory: {e}")
+
+
 def main() -> None:
+    # First, ensure we're in the correct directory
+    ensure_correct_working_directory()
+
     print("Starting Lab Agent...")
     logger.info("Starting Lab Agent...")
+    logger.info(f"Script directory: {UPDATER_DIR}")
+    logger.info(f"Working directory: {os.getcwd()}")
 
     logger.info("Checking for updates...")
     check_updates()
