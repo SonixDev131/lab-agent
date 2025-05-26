@@ -118,7 +118,7 @@ def apply_update_safely():
                 # Remove destination if exists, then move
                 if os.path.exists(dst):
                     os.remove(dst)
-                shutil.move(src, dst)
+                shutil.copy2(src, dst)
                 logger.info(f"Updated: {item} -> {dst}")
 
         # Keep extract directory for debugging/backup purposes
