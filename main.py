@@ -13,6 +13,17 @@ import pika
 import psutil
 import requests
 
+# Testing update 1
+# Testing update 2
+# Testing update 3
+# Testing update 4
+# Testing update 5
+# Testing update 6
+# Testing update 7
+# Testing update 8
+# Testing update 9
+# Testing update 10
+
 # ===================== LOGGER =====================
 logger = logging.getLogger("Agent")
 logging.basicConfig(
@@ -380,6 +391,165 @@ def send_command_result(
         return False
 
 
+def download_installer(
+    installer_id: str,
+    installer_name: str,
+    download_url: str,
+    auto_install: bool = False,
+    install_args: list = None,
+) -> tuple[bool, str]:
+    """
+    Download an installer using the API endpoint and optionally auto-install it
+
+    Args:
+        installer_id: Unique identifier for the installer
+        installer_name: Name/filename for the installer
+        download_url: URL to download the installer from (legacy parameter, now unused)
+        auto_install: Whether to automatically run the installer after download
+        install_args: Additional arguments to pass to the installer
+
+    Returns:
+        tuple[bool, str]: (success, message)
+    """
+    if install_args is None:
+        install_args = []
+
+    try:
+        logger.info(
+            f"Starting download of installer: {installer_name} (ID: {installer_id})"
+        )
+
+        # Validate installer_id
+        if not installer_id:
+            return False, "Installer ID is required"
+
+        # Check available disk space (at least 500MB free for installers)
+        disk_usage = psutil.disk_usage(".")
+        free_space_mb = disk_usage.free / (1024 * 1024)
+        if free_space_mb < 500:
+            return (
+                False,
+                f"Insufficient disk space: {free_space_mb:.1f}MB free, need at least 500MB",
+            )
+
+        # Create downloads directory if it doesn't exist
+        downloads_dir = os.path.join(UPDATER_DIR, "downloads")
+        os.makedirs(downloads_dir, exist_ok=True)
+
+        # Construct API URL for installer download
+        api_url = f"{APP_URL}/api/agent/installer/{installer_id}"
+        logger.info(f"Downloading from API: {api_url}")
+
+        # Download the file from API
+        response = requests.get(
+            api_url,
+            stream=True,
+            timeout=300,  # 5 minute timeout
+            headers={"User-Agent": "Lab-Agent/1.0"},
+        )
+
+        if response.status_code != 200:
+            return (
+                False,
+                f"Failed to download installer from API: HTTP {response.status_code}",
+            )
+
+        # Get filename from Content-Disposition header or use installer_name
+        filename = installer_name
+        if "content-disposition" in response.headers:
+            import re
+
+            cd_header = response.headers["content-disposition"]
+            filename_match = re.search(r"filename[*]?=([^;]+)", cd_header)
+            if filename_match:
+                filename = filename_match.group(1).strip("\"'")
+
+        # Fallback to installer_name or generate filename
+        if not filename:
+            filename = f"{installer_name or f'installer_{installer_id}'}.exe"
+
+        file_path = os.path.join(downloads_dir, filename)
+
+        logger.info(f"Saving installer to: {file_path}")
+
+        total_size = int(response.headers.get("content-length", 0))
+        downloaded = 0
+
+        with open(file_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    # Log progress every 10MB
+                    if downloaded % (10 * 1024 * 1024) == 0:
+                        if total_size > 0:
+                            progress = (downloaded / total_size) * 100
+                            logger.info(f"Download progress: {progress:.1f}%")
+
+        # Verify file was downloaded successfully
+        if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+            return False, "Download failed: File not found or empty"
+
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        logger.info(f"Successfully downloaded {filename} ({file_size_mb:.1f}MB)")
+
+        result_msg = f"Successfully downloaded {filename} ({file_size_mb:.1f}MB)"
+
+        # Auto-install if requested
+        if auto_install:
+            logger.info(f"Auto-installing {filename}...")
+            try:
+                # Determine installation command based on file extension
+                _, ext = os.path.splitext(filename.lower())
+
+                if ext in [".msi"]:
+                    # MSI installer
+                    cmd = ["msiexec", "/i", file_path, "/quiet"] + install_args
+                elif ext in [".exe"]:
+                    # EXE installer - try silent installation flags
+                    cmd = [file_path, "/S", "/silent"] + install_args
+                else:
+                    # Unknown format, try to run directly
+                    cmd = [file_path] + install_args
+
+                logger.info(f"Running installation command: {' '.join(cmd)}")
+
+                # Run the installer
+                install_result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=1800,  # 30 minute timeout for installation
+                    cwd=downloads_dir,
+                )
+
+                if install_result.returncode == 0:
+                    result_msg += " and successfully installed"
+                    logger.info("Installation completed successfully")
+                else:
+                    result_msg += f" but installation failed (exit code: {install_result.returncode})"
+                    if install_result.stderr:
+                        result_msg += f": {install_result.stderr.strip()}"
+                    logger.warning(f"Installation failed: {install_result.stderr}")
+
+            except subprocess.TimeoutExpired:
+                result_msg += " but installation timed out after 30 minutes"
+                logger.error("Installation timed out")
+            except Exception as e:
+                result_msg += f" but installation failed: {str(e)}"
+                logger.error(f"Installation error: {e}")
+
+        return True, result_msg
+
+    except requests.exceptions.Timeout:
+        return False, "Download timeout after 5 minutes"
+    except requests.exceptions.RequestException as e:
+        return False, f"Network error during download: {str(e)}"
+    except Exception as e:
+        logger.error(f"[download_installer] Error downloading installer: {e}")
+        return False, f"Error downloading installer: {str(e)}"
+
+
 def process_command(message: dict) -> bool:
     try:
         logger.info(f"Processing command: {message}")
@@ -433,6 +603,29 @@ def process_command(message: dict) -> bool:
                 logger.info("Received unblock website command. Unblocking website...")
                 urls = params.get("urls", [])
                 success, msg = remove_website_block(urls)
+                if success:
+                    output = msg
+                else:
+                    error = msg
+            elif type_upper == "DOWNLOAD_INSTALLER":
+                logger.info(
+                    "Received download_installer command. Processing download installer..."
+                )
+                installer_id = message.get("installer_id", "")
+                installer_name = message.get("installer_name", "")
+                download_url = message.get("download_url", "")
+                auto_install = message.get("auto_install", False)
+                install_args = message.get("install_args", [])
+                logger.info(
+                    f"Download params - ID: {installer_id}, Name: {installer_name}, URL: {download_url}, Auto-install: {auto_install}"
+                )
+                success, msg = download_installer(
+                    installer_id,
+                    installer_name,
+                    download_url,
+                    auto_install,
+                    install_args,
+                )
                 if success:
                     output = msg
                 else:
