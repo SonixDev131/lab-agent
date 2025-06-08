@@ -7,22 +7,14 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
+from io import BytesIO
 from typing import Optional, Tuple
 
 import pika
 import psutil
 import requests
-
-# Testing update 1
-# Testing update 2
-# Testing update 3
-# Testing update 4
-# Testing update 5
-# Testing update 6
-# Testing update 7
-# Testing update 8
-# Testing update 9
-# Testing update 10
+from PIL import ImageGrab
 
 # ===================== LOGGER =====================
 logger = logging.getLogger("Agent")
@@ -35,13 +27,14 @@ logging.basicConfig(
 # ===================== CONSTANTS =====================
 AGENT_ZIP = "agent_new.zip"
 UPDATE_TEMP = "update_temp"
-APP_URL = "http://host.docker.internal"
+APP_URL = "http://13.250.24.210"
 VERSION_FILE = "version.txt"
 REGISTER_ENDPOINT = "/api/agents/register"
 UPDATE_ENDPOINT = "/api/agent/update"
 VERSION_ENDPOINT = "/api/agent/version"
 COMMAND_RESULT_ENDPOINT = "/api/agent/command-result"
-RABBITMQ_URL = "amqp://guest:guest@host.docker.internal:5672/"
+SCREENSHOT_ENDPOINT = "/api/agent/screenshot"
+RABBITMQ_URL = "amqp://guest:guest@13.250.24.210:5672/"
 SERVICE_NAME = "agent"  # or your actual service name
 UPDATER_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(UPDATER_DIR, "agent_config.json")
@@ -495,50 +488,6 @@ def download_installer(
 
         result_msg = f"Successfully downloaded {filename} ({file_size_mb:.1f}MB)"
 
-        # Auto-install if requested
-        if auto_install:
-            logger.info(f"Auto-installing {filename}...")
-            try:
-                # Determine installation command based on file extension
-                _, ext = os.path.splitext(filename.lower())
-
-                if ext in [".msi"]:
-                    # MSI installer
-                    cmd = ["msiexec", "/i", file_path, "/quiet"] + install_args
-                elif ext in [".exe"]:
-                    # EXE installer - try silent installation flags
-                    cmd = [file_path, "/S", "/silent"] + install_args
-                else:
-                    # Unknown format, try to run directly
-                    cmd = [file_path] + install_args
-
-                logger.info(f"Running installation command: {' '.join(cmd)}")
-
-                # Run the installer
-                install_result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=1800,  # 30 minute timeout for installation
-                    cwd=downloads_dir,
-                )
-
-                if install_result.returncode == 0:
-                    result_msg += " and successfully installed"
-                    logger.info("Installation completed successfully")
-                else:
-                    result_msg += f" but installation failed (exit code: {install_result.returncode})"
-                    if install_result.stderr:
-                        result_msg += f": {install_result.stderr.strip()}"
-                    logger.warning(f"Installation failed: {install_result.stderr}")
-
-            except subprocess.TimeoutExpired:
-                result_msg += " but installation timed out after 30 minutes"
-                logger.error("Installation timed out")
-            except Exception as e:
-                result_msg += f" but installation failed: {str(e)}"
-                logger.error(f"Installation error: {e}")
-
         return True, result_msg
 
     except requests.exceptions.Timeout:
@@ -548,6 +497,149 @@ def download_installer(
     except Exception as e:
         logger.error(f"[download_installer] Error downloading installer: {e}")
         return False, f"Error downloading installer: {str(e)}"
+
+
+def take_screenshot(quality: int = 85) -> tuple[bool, Optional[BytesIO], Optional[str]]:
+    """
+    Take a screenshot of the current desktop
+
+    Args:
+        quality: JPEG quality (1-100, default 85)
+
+    Returns:
+        tuple[bool, Optional[BytesIO], Optional[str]]: (success, image_buffer, error_message)
+    """
+    try:
+        logger.info("Taking screenshot...")
+
+        # Take screenshot using PIL
+        screenshot = ImageGrab.grab()
+
+        if screenshot is None:
+            return False, None, "Failed to capture screenshot"
+
+        # Convert to RGB if needed (remove alpha channel for JPEG)
+        if screenshot.mode == "RGBA":
+            screenshot = screenshot.convert("RGB")
+
+        # Create BytesIO buffer
+        img_buffer = BytesIO()
+
+        # Save screenshot as JPEG to buffer
+        screenshot.save(img_buffer, format="JPEG", quality=quality, optimize=True)
+        img_buffer.seek(0)
+
+        # Get image size info
+        img_size_mb = len(img_buffer.getvalue()) / (1024 * 1024)
+        logger.info(
+            f"Screenshot captured successfully. Size: {img_size_mb:.2f}MB, Resolution: {screenshot.size}"
+        )
+
+        return True, img_buffer, None
+
+    except Exception as e:
+        error_msg = f"[take_screenshot] Error taking screenshot: {e}"
+        logger.error(error_msg)
+        return False, None, error_msg
+
+
+def upload_screenshot(
+    command_id: str, computer_id: str, screenshot_buffer: BytesIO
+) -> tuple[bool, str]:
+    """
+    Upload screenshot to server
+
+    Args:
+        command_id: Command ID that requested the screenshot
+        computer_id: Computer ID
+        screenshot_buffer: BytesIO buffer containing the screenshot
+
+    Returns:
+        tuple[bool, str]: (success, message)
+    """
+    try:
+        logger.info(f"Uploading screenshot for command_id: {command_id}")
+
+        # Prepare the current timestamp in ISO format
+        taken_at = datetime.now().isoformat()
+
+        # Prepare form data
+        files = {"screenshot": ("screenshot.jpg", screenshot_buffer, "image/jpeg")}
+
+        data = {
+            "command_id": command_id,
+            "computer_id": computer_id,
+            "taken_at": taken_at,
+        }
+
+        logger.debug(f"Upload data: {data}")
+
+        # Send POST request to upload screenshot
+        response = requests.post(
+            f"{APP_URL}{SCREENSHOT_ENDPOINT}",
+            files=files,
+            data=data,
+            timeout=60,  # 1 minute timeout for screenshot upload
+        )
+
+        if response.status_code == 200:
+            logger.info(
+                f"Screenshot uploaded successfully for command_id: {command_id}"
+            )
+            return True, "Screenshot uploaded successfully"
+        else:
+            error_msg = f"Failed to upload screenshot: HTTP {response.status_code} - {response.text}"
+            logger.error(error_msg)
+            return False, error_msg
+
+    except requests.exceptions.Timeout:
+        error_msg = "Upload timeout after 1 minute"
+        logger.error(f"[upload_screenshot] {error_msg}")
+        return False, error_msg
+    except requests.exceptions.RequestException as e:
+        error_msg = f"Network error during upload: {str(e)}"
+        logger.error(f"[upload_screenshot] {error_msg}")
+        return False, error_msg
+    except Exception as e:
+        error_msg = f"Error uploading screenshot: {str(e)}"
+        logger.error(f"[upload_screenshot] {error_msg}")
+        return False, error_msg
+
+
+def capture_and_send_screenshot(
+    command_id: str, computer_id: str, quality: int = 85
+) -> tuple[bool, str]:
+    """
+    Complete workflow to capture screenshot and send to server
+
+    Args:
+        command_id: Command ID that requested the screenshot
+        computer_id: Computer ID
+        quality: JPEG quality (1-100, default 85)
+
+    Returns:
+        tuple[bool, str]: (success, message)
+    """
+    try:
+        # Take screenshot
+        success, img_buffer, error = take_screenshot(quality)
+
+        if not success:
+            return False, error or "Failed to take screenshot"
+
+        # Upload screenshot
+        success, message = upload_screenshot(command_id, computer_id, img_buffer)
+
+        # Clean up buffer
+        if img_buffer:
+            img_buffer.close()
+
+        return success, message
+
+    except Exception as e:
+        error_msg = f"[capture_and_send_screenshot] Error in screenshot workflow: {e}"
+        logger.error(error_msg)
+        return False, error_msg
 
 
 def process_command(message: dict) -> bool:
@@ -630,6 +722,30 @@ def process_command(message: dict) -> bool:
                     output = msg
                 else:
                     error = msg
+            elif type_upper == "SCREENSHOT":
+                logger.info(
+                    "Received screenshot command. Taking and uploading screenshot..."
+                )
+                # Get computer_id from config for screenshot upload
+                config = get_config_info()
+                computer_id_for_screenshot = config.get("computer_id")
+
+                if not computer_id_for_screenshot:
+                    success = False
+                    error = "Computer ID not found in config"
+                else:
+                    # Get quality parameter (optional, default 85)
+                    quality = params.get("quality", 85)
+                    if not isinstance(quality, int) or quality < 1 or quality > 100:
+                        quality = 85
+
+                    success, msg = capture_and_send_screenshot(
+                        command_id, computer_id_for_screenshot, quality
+                    )
+                    if success:
+                        output = msg
+                    else:
+                        error = msg
             elif type_upper == "CUSTOM":
                 logger.info("Received custom command. Executing custom command...")
                 name = params.get("name", "")
