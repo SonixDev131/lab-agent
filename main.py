@@ -16,6 +16,21 @@ import psutil
 import requests
 from PIL import ImageGrab
 
+# Add alternative screenshot imports
+try:
+    import mss
+
+    MSS_AVAILABLE = True
+except ImportError:
+    MSS_AVAILABLE = False
+
+try:
+    import pyautogui
+
+    PYAUTOGUI_AVAILABLE = True
+except ImportError:
+    PYAUTOGUI_AVAILABLE = False
+
 # ===================== LOGGER =====================
 logger = logging.getLogger("Agent")
 logging.basicConfig(
@@ -512,11 +527,52 @@ def take_screenshot(quality: int = 85) -> tuple[bool, Optional[BytesIO], Optiona
     try:
         logger.info("Taking screenshot...")
 
+        # Check if we're in Session 0 (service context)
+        import ctypes
+
+        session_id = ctypes.windll.kernel32.WTSGetActiveConsoleSessionId()
+        current_session = ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid())
+        logger.info(
+            f"Current session: {current_session}, Active console session: {session_id}"
+        )
+
+        if current_session == 0:
+            logger.warning(
+                "Running in Session 0 - screenshot may fail due to session isolation"
+            )
+
         # Take screenshot using PIL
         screenshot = ImageGrab.grab()
 
         if screenshot is None:
-            return False, None, "Failed to capture screenshot"
+            error_details = []
+
+            # Check for common causes
+            if current_session == 0:
+                error_details.append(
+                    "Session 0 isolation (service cannot access user desktop)"
+                )
+
+            # Check if display is available
+            try:
+                import tkinter as tk
+
+                root = tk.Tk()
+                screen_width = root.winfo_screenwidth()
+                screen_height = root.winfo_screenheight()
+                root.destroy()
+                if screen_width <= 0 or screen_height <= 0:
+                    error_details.append("Invalid screen dimensions")
+            except Exception as display_error:
+                error_details.append(f"Display access error: {display_error}")
+
+            error_msg = (
+                "Failed to capture screenshot. Possible causes: "
+                + "; ".join(error_details)
+                if error_details
+                else "Unknown screenshot capture failure"
+            )
+            return False, None, error_msg
 
         # Convert to RGB if needed (remove alpha channel for JPEG)
         if screenshot.mode == "RGBA":
@@ -537,10 +593,267 @@ def take_screenshot(quality: int = 85) -> tuple[bool, Optional[BytesIO], Optiona
 
         return True, img_buffer, None
 
+    except ImportError as e:
+        error_msg = f"[take_screenshot] Missing dependency: {e}"
+        logger.error(error_msg)
+        return False, None, error_msg
+    except PermissionError as e:
+        error_msg = f"[take_screenshot] Permission denied: {e}. Service may need 'Interact with desktop' permission"
+        logger.error(error_msg)
+        return False, None, error_msg
+    except OSError as e:
+        error_msg = f"[take_screenshot] System error: {e}. Check graphics drivers and display configuration"
+        logger.error(error_msg)
+        return False, None, error_msg
     except Exception as e:
         error_msg = f"[take_screenshot] Error taking screenshot: {e}"
         logger.error(error_msg)
         return False, None, error_msg
+
+
+def take_screenshot_mss(
+    quality: int = 85,
+) -> tuple[bool, Optional[BytesIO], Optional[str]]:
+    """
+    Alternative screenshot method using mss library
+
+    Args:
+        quality: JPEG quality (1-100, default 85)
+
+    Returns:
+        tuple[bool, Optional[BytesIO], Optional[str]]: (success, image_buffer, error_message)
+    """
+    if not MSS_AVAILABLE:
+        return False, None, "mss library not available"
+
+    try:
+        logger.info("Taking screenshot using mss...")
+
+        with mss.mss() as sct:
+            # Capture all monitors or just the first one
+            monitor = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+            screenshot = sct.grab(monitor)
+
+            # Convert to PIL Image
+            from PIL import Image
+
+            img = Image.frombytes(
+                "RGB", screenshot.size, screenshot.bgra, "raw", "BGRX"
+            )
+
+            # Create BytesIO buffer
+            img_buffer = BytesIO()
+            img.save(img_buffer, format="JPEG", quality=quality, optimize=True)
+            img_buffer.seek(0)
+
+            img_size_mb = len(img_buffer.getvalue()) / (1024 * 1024)
+            logger.info(
+                f"Screenshot (mss) captured successfully. Size: {img_size_mb:.2f}MB, Resolution: {img.size}"
+            )
+
+            return True, img_buffer, None
+
+    except Exception as e:
+        error_msg = f"[take_screenshot_mss] Error: {e}"
+        logger.error(error_msg)
+        return False, None, error_msg
+
+
+def take_screenshot_pyautogui(
+    quality: int = 85,
+) -> tuple[bool, Optional[BytesIO], Optional[str]]:
+    """
+    Alternative screenshot method using pyautogui
+
+    Args:
+        quality: JPEG quality (1-100, default 85)
+
+    Returns:
+        tuple[bool, Optional[BytesIO], Optional[str]]: (success, image_buffer, error_message)
+    """
+    if not PYAUTOGUI_AVAILABLE:
+        return False, None, "pyautogui library not available"
+
+    try:
+        logger.info("Taking screenshot using pyautogui...")
+
+        screenshot = pyautogui.screenshot()
+
+        if screenshot is None:
+            return False, None, "pyautogui screenshot returned None"
+
+        # Convert to RGB if needed
+        if screenshot.mode == "RGBA":
+            screenshot = screenshot.convert("RGB")
+
+        # Create BytesIO buffer
+        img_buffer = BytesIO()
+        screenshot.save(img_buffer, format="JPEG", quality=quality, optimize=True)
+        img_buffer.seek(0)
+
+        img_size_mb = len(img_buffer.getvalue()) / (1024 * 1024)
+        logger.info(
+            f"Screenshot (pyautogui) captured successfully. Size: {img_size_mb:.2f}MB, Resolution: {screenshot.size}"
+        )
+
+        return True, img_buffer, None
+
+    except Exception as e:
+        error_msg = f"[take_screenshot_pyautogui] Error: {e}"
+        logger.error(error_msg)
+        return False, None, error_msg
+
+
+def take_screenshot_winapi(
+    quality: int = 85,
+) -> tuple[bool, Optional[BytesIO], Optional[str]]:
+    """
+    Alternative screenshot method using Windows API
+
+    Args:
+        quality: JPEG quality (1-100, default 85)
+
+    Returns:
+        tuple[bool, Optional[BytesIO], Optional[str]]: (success, image_buffer, error_message)
+    """
+    try:
+        logger.info("Taking screenshot using Windows API...")
+
+        import ctypes
+        from ctypes import wintypes
+
+        # Get screen dimensions
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+
+        screen_width = user32.GetSystemMetrics(0)  # SM_CXSCREEN
+        screen_height = user32.GetSystemMetrics(1)  # SM_CYSCREEN
+
+        if screen_width <= 0 or screen_height <= 0:
+            return False, None, "Invalid screen dimensions from Windows API"
+
+        # Create device contexts
+        hdc_screen = user32.GetDC(0)
+        hdc_mem = gdi32.CreateCompatibleDC(hdc_screen)
+
+        # Create bitmap
+        hbitmap = gdi32.CreateCompatibleBitmap(hdc_screen, screen_width, screen_height)
+        gdi32.SelectObject(hdc_mem, hbitmap)
+
+        # Copy screen to bitmap
+        gdi32.BitBlt(
+            hdc_mem, 0, 0, screen_width, screen_height, hdc_screen, 0, 0, 0x00CC0020
+        )  # SRCCOPY
+
+        # Get bitmap info
+        class BITMAPINFOHEADER(ctypes.Structure):
+            _fields_ = [
+                ("biSize", wintypes.DWORD),
+                ("biWidth", wintypes.LONG),
+                ("biHeight", wintypes.LONG),
+                ("biPlanes", wintypes.WORD),
+                ("biBitCount", wintypes.WORD),
+                ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD),
+                ("biXPelsPerMeter", wintypes.LONG),
+                ("biYPelsPerMeter", wintypes.LONG),
+                ("biClrUsed", wintypes.DWORD),
+                ("biClrImportant", wintypes.DWORD),
+            ]
+
+        bmi = BITMAPINFOHEADER()
+        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.biWidth = screen_width
+        bmi.biHeight = -screen_height  # Negative for top-down DIB
+        bmi.biPlanes = 1
+        bmi.biBitCount = 24
+        bmi.biCompression = 0  # BI_RGB
+
+        # Calculate buffer size
+        buffer_size = screen_width * screen_height * 3  # 24-bit RGB
+        buffer = (ctypes.c_ubyte * buffer_size)()
+
+        # Get DIB bits
+        result = gdi32.GetDIBits(
+            hdc_screen, hbitmap, 0, screen_height, buffer, ctypes.byref(bmi), 0
+        )
+
+        # Clean up
+        gdi32.DeleteObject(hbitmap)
+        gdi32.DeleteDC(hdc_mem)
+        user32.ReleaseDC(0, hdc_screen)
+
+        if result == 0:
+            return False, None, "GetDIBits failed"
+
+        # Convert to PIL Image
+        from PIL import Image
+
+        img = Image.frombuffer(
+            "RGB", (screen_width, screen_height), buffer, "raw", "BGR", 0, 1
+        )
+
+        # Create BytesIO buffer
+        img_buffer = BytesIO()
+        img.save(img_buffer, format="JPEG", quality=quality, optimize=True)
+        img_buffer.seek(0)
+
+        img_size_mb = len(img_buffer.getvalue()) / (1024 * 1024)
+        logger.info(
+            f"Screenshot (WinAPI) captured successfully. Size: {img_size_mb:.2f}MB, Resolution: {img.size}"
+        )
+
+        return True, img_buffer, None
+
+    except Exception as e:
+        error_msg = f"[take_screenshot_winapi] Error: {e}"
+        logger.error(error_msg)
+        return False, None, error_msg
+
+
+def take_screenshot_with_fallbacks(
+    quality: int = 85,
+) -> tuple[bool, Optional[BytesIO], Optional[str]]:
+    """
+    Try multiple screenshot methods with fallbacks
+
+    Args:
+        quality: JPEG quality (1-100, default 85)
+
+    Returns:
+        tuple[bool, Optional[BytesIO], Optional[str]]: (success, image_buffer, error_message)
+    """
+    methods = [
+        ("PIL ImageGrab", take_screenshot),
+        ("MSS Library", take_screenshot_mss),
+        ("PyAutoGUI", take_screenshot_pyautogui),
+        ("Windows API", take_screenshot_winapi),
+    ]
+
+    errors = []
+
+    for method_name, method_func in methods:
+        try:
+            logger.info(f"Trying screenshot method: {method_name}")
+            success, img_buffer, error = method_func(quality)
+
+            if success and img_buffer:
+                logger.info(f"Screenshot successful using {method_name}")
+                return True, img_buffer, None
+            else:
+                error_msg = f"{method_name}: {error or 'Unknown error'}"
+                errors.append(error_msg)
+                logger.warning(f"Screenshot method {method_name} failed: {error}")
+
+        except Exception as e:
+            error_msg = f"{method_name}: Exception - {e}"
+            errors.append(error_msg)
+            logger.error(f"Screenshot method {method_name} exception: {e}")
+
+    # All methods failed
+    combined_error = "All screenshot methods failed. Errors: " + " | ".join(errors)
+    logger.error(combined_error)
+    return False, None, combined_error
 
 
 def upload_screenshot(
@@ -622,7 +935,7 @@ def capture_and_send_screenshot(
     """
     try:
         # Take screenshot
-        success, img_buffer, error = take_screenshot(quality)
+        success, img_buffer, error = take_screenshot_with_fallbacks(quality)
 
         if not success:
             return False, error or "Failed to take screenshot"
